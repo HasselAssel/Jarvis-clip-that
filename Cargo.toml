@@ -6,3 +6,16 @@ edition = "2021"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
+screenshots = "0.8.10"
+image = "0.25.5"
+winapi = { version = "0.3.9", features = ["winuser", "wingdi", "winnt", "ntdef", "windef", "minwindef"] }
+
+windows = { version = "0.60.0", features = ["Win32_Graphics_Dxgi", "Win32_Graphics_Direct3D11", "Win32_Graphics_Direct3D", "Win32_System", "Win32_System_Threading", "Win32_Graphics_Dxgi_Common", "Win32_System_LibraryLoader", "Win32_Graphics_Gdi", "Win32_System_Memory"] }
+
+rgb2yuv420 = "0.2.3"
+
+openh264 = { version = "0.8.0", features = ["source"] }
+
+
+
+#ffmpeg-sys = { version = "4.3.3", features = ["build"] }
