@@ -17,5 +17,6 @@ rgb2yuv420 = "0.2.3"
 openh264 = { version = "0.8.0", features = ["source"] }
 
 
+ffmpeg-next = "7.1.0"
 
 #ffmpeg-sys = { version = "4.3.3", features = ["build"] }

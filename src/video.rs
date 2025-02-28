@@ -18,8 +18,13 @@ use openh264::encoder::{BitRate, Encoder, EncoderConfig, FrameRate, IntraFramePe
 use openh264::formats::{YUVBuffer, BgrSliceU8};
 use openh264::OpenH264API;
 
+use ffmpeg_next::util::frame::Video;
+
 
 use crate::{TimeTracker};
+
+
+
 
 pub fn hbitmap_to_png(hbitmap: HBITMAP, output_path: &str) -> Result<(), String> {
     let mut tt = TimeTracker::new();
@@ -288,4 +293,36 @@ pub fn hbitmaps_to_h264(hbitmaps: &Vec<HBITMAP>, fps: u32) -> Result<(), String>
     }
 
     Ok(())
+}
+
+
+fn save_video(frames: Vec<Video>, width: usize, height: usize) -> () {
+    println!("inside save video");
+    let mut encoder = video_rs::encode::Encoder::new(
+        Path::new("video_in.mp4"),
+        // Settings::preset_h264_yuv420p(width, height, true),
+        Settings::preset_h264_custom(width, height, PixelFormat::NV12, Options::default()),
+    )
+        .unwrap();
+    for frame in frames.clone() {
+        let result = encoder.encode_raw(frame.clone());
+        match result {
+            Ok(_) => {
+                println!("succesfully ecoded a frame");
+            }
+            Err(e) => {
+                println!("error occured when encoding {}", e);
+            }
+        }
+    }
+    let result = encoder.finish();
+    match result {
+        Ok(_) => {
+            println!("succesfully ecoded all");
+        }
+        Err(e) => {
+            println!("error occured when finishing encoding {}", e);
+        }
+    }
+    println!("number of frames {}", frames.len());
 }
