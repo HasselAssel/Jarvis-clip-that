@@ -71,9 +71,6 @@ pub fn capture_screen() -> Result<(HBITMAP, i32, i32), ()> {
 }
 
 pub fn capture_screens(amount: usize, fps: u32) -> Result<(Vec<HBITMAP>, i32, i32), ()> {
-    let width;
-    let height;
-
     unsafe {
         // Get the screen DC
         let h_screen_dc = GetDC(ptr::null_mut());
@@ -89,8 +86,8 @@ pub fn capture_screens(amount: usize, fps: u32) -> Result<(Vec<HBITMAP>, i32, i3
         }
 
         // Get screen dimensions
-        width = GetDeviceCaps(h_screen_dc, HORZRES);
-        height = GetDeviceCaps(h_screen_dc, VERTRES);
+        let width = GetDeviceCaps(h_screen_dc, HORZRES);
+        let height = GetDeviceCaps(h_screen_dc, VERTRES);
 
         let mut screenshots = Vec::with_capacity(amount);
         let mut error_occurred = false;

@@ -1,21 +1,60 @@
 use std::time::Instant;
 
-mod screenshot;
+mod screenshot_winapi;
 mod video;
+mod screenshot_directx;
 
 
 fn main() {
     //capture_one();
     //capture_multiple();
-    capture_multiple_to_h264();
+    //capture_multiple_to_h264();
+    directx_try().expect("TODO: panic message");
 }
+
+
+
+fn directx_try() -> Result<(), windows::core::Error> {
+    unsafe {
+        // Capture the desktop and obtain the context and staging texture.
+        let (context, staging_texture) = screenshot_directx::capture_desktop_screenshots()?;
+        // Save the staging texture as a PNG file.
+        screenshot_directx::save_texture_to_png(&context, &staging_texture, "out/screenshot.png")?;
+        println!("Screenshot saved to screenshot.png");
+    }
+    Ok(())
+}
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 fn capture_one() {
     let mut start_time;
     let mut end_time;
 
     start_time = Instant::now();
-    let a = screenshot::capture_screen();
+    let a = screenshot_winapi::capture_screen();
     println!("{:?}", a);
     end_time = Instant::now(); println!("Capturing Time: {:?}", end_time - start_time);
 
@@ -32,7 +71,7 @@ fn capture_multiple() {
     let mut end_time;
 
     start_time = Instant::now();
-    let a = screenshot::capture_screens(10, 5);
+    let a = screenshot_winapi::capture_screens(10, 5);
     println!("{:?}", a);
     end_time = Instant::now(); println!("Capturing Time: {:?}", end_time - start_time);
 
@@ -53,7 +92,7 @@ fn capture_multiple_to_h264() {
     let mut end_time;
 
     start_time = Instant::now();
-    let a = screenshot::capture_screens(100, fps);
+    let a = screenshot_winapi::capture_screens(100, fps);
     println!("{:?}", a);
     end_time = Instant::now(); println!("Capturing Time: {:?}", end_time - start_time);
 
@@ -63,24 +102,4 @@ fn capture_multiple_to_h264() {
         video::hbitmaps_to_h264(screenshots, fps).expect("TODO: panic message");;
     }
     end_time = Instant::now(); println!("Converting Time: {:?}", end_time - start_time);
-}
-
-
-
-struct TimeTracker {
-    last_time: Instant
-}
-
-impl TimeTracker {
-    fn time_since_last_marker(&mut self) {
-        let new_time = Instant::now();
-        println!("Tracked Time: {:?}", new_time - self.last_time);
-        self.last_time = new_time;
-    }
-
-    fn new() -> Self{
-        Self {
-            last_time: Instant::now()
-        }
-    }
 }
