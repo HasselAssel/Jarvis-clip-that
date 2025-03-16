@@ -14,20 +14,13 @@ use image::{ImageBuffer, RgbaImage, codecs::png::PngEncoder, ImageEncoder};
 
 use rgb2yuv420::convert_rgb_to_yuv420p;
 
-use openh264::encoder::{BitRate, Encoder, EncoderConfig, FrameRate, IntraFramePeriod, QpRange, RateControlMode};
+use openh264::encoder::{BitRate, Encoder, EncoderConfig, IntraFramePeriod, QpRange};
 use openh264::formats::{YUVBuffer, BgrSliceU8};
 use openh264::OpenH264API;
-
-use ffmpeg_next::util::frame::Video;
-
-
-use crate::{TimeTracker};
-
 
 
 
 pub fn hbitmap_to_png(hbitmap: HBITMAP, output_path: &str) -> Result<(), String> {
-    let mut tt = TimeTracker::new();
     unsafe {
         // Get bitmap dimensions and format
         let mut bitmap: BITMAP = mem::zeroed();
@@ -39,8 +32,6 @@ pub fn hbitmap_to_png(hbitmap: HBITMAP, output_path: &str) -> Result<(), String>
         {
             return Err("Failed to get bitmap info".into());
         }
-
-        tt.time_since_last_marker(); // DEBUG
 
         let width = bitmap.bmWidth;
         let height = bitmap.bmHeight.abs(); // Handle negative height (top-down)
@@ -55,8 +46,6 @@ pub fn hbitmap_to_png(hbitmap: HBITMAP, output_path: &str) -> Result<(), String>
         bmi.biBitCount = 32;
         bmi.biCompression = BI_RGB;
 
-        tt.time_since_last_marker(); // DEBUG
-
         let mut bitmap_info = BITMAPINFO {
             bmiHeader: bmi,
             bmiColors: [mem::zeroed()], // Initialize with zeroed RGBQUAD
@@ -65,8 +54,6 @@ pub fn hbitmap_to_png(hbitmap: HBITMAP, output_path: &str) -> Result<(), String>
         // Create buffer for pixel data
         let buffer_size = (width * height * 4) as usize;
         let mut buffer: Vec<u8> = vec![0; buffer_size];
-
-        tt.time_since_last_marker(); // DEBUG
 
         // Get device context
         let hdc = GetDC(ptr::null_mut());
@@ -85,8 +72,6 @@ pub fn hbitmap_to_png(hbitmap: HBITMAP, output_path: &str) -> Result<(), String>
             return Err("Failed to get bitmap bits".into());
         }
 
-        tt.time_since_last_marker(); // DEBUG
-
         // Convert BGRA to RGBA and handle alpha channel
         for chunk in buffer.chunks_exact_mut(4) {
             // Swap red and blue channels (BGRA -> RGBA)
@@ -98,16 +83,12 @@ pub fn hbitmap_to_png(hbitmap: HBITMAP, output_path: &str) -> Result<(), String>
             }
         }
 
-        tt.time_since_last_marker(); // DEBUG
-
         // Create image and save as PNG
         let image: RgbaImage = ImageBuffer::from_raw(
             width as u32,
             height as u32,
             buffer,
         ).ok_or("Failed to create image buffer")?;
-
-        tt.time_since_last_marker(); // DEBUG
 
         /*image.save(output_path)
             .map_err(|e| format!("Failed to save PNG: {}", e))?;*/
@@ -124,8 +105,6 @@ pub fn hbitmap_to_png(hbitmap: HBITMAP, output_path: &str) -> Result<(), String>
             image.height(),
             image::ExtendedColorType::Rgba8,
         ).expect("TODO: panic message");
-
-        tt.time_since_last_marker(); // DEBUG
 
         Ok(())
     }
@@ -293,36 +272,4 @@ pub fn hbitmaps_to_h264(hbitmaps: &Vec<HBITMAP>, fps: u32) -> Result<(), String>
     }
 
     Ok(())
-}
-
-
-fn save_video(frames: Vec<Video>, width: usize, height: usize) -> () {
-    println!("inside save video");
-    let mut encoder = video_rs::encode::Encoder::new(
-        Path::new("video_in.mp4"),
-        // Settings::preset_h264_yuv420p(width, height, true),
-        Settings::preset_h264_custom(width, height, PixelFormat::NV12, Options::default()),
-    )
-        .unwrap();
-    for frame in frames.clone() {
-        let result = encoder.encode_raw(frame.clone());
-        match result {
-            Ok(_) => {
-                println!("succesfully ecoded a frame");
-            }
-            Err(e) => {
-                println!("error occured when encoding {}", e);
-            }
-        }
-    }
-    let result = encoder.finish();
-    match result {
-        Ok(_) => {
-            println!("succesfully ecoded all");
-        }
-        Err(e) => {
-            println!("error occured when finishing encoding {}", e);
-        }
-    }
-    println!("number of frames {}", frames.len());
 }
