@@ -2,7 +2,7 @@ use std::time::Instant;
 
 mod screenshot_winapi;
 mod video;
-mod screenshot_directx;
+mod screenshot_duplicationapi;
 
 
 fn main() {
@@ -17,9 +17,9 @@ fn main() {
 fn directx_try() -> Result<(), windows::core::Error> {
     unsafe {
         // Capture the desktop and obtain the context and staging texture.
-        let (context, staging_texture) = screenshot_directx::capture_desktop_screenshots()?;
+        let v = screenshot_duplicationapi::capture_desktop_screenshots()?;
         // Save the staging texture as a PNG file.
-        screenshot_directx::save_texture_to_png(&context, &staging_texture, "out/screenshot.png")?;
+        screenshot_duplicationapi::save_texture_to_png(&v.0, &v.1, "out/screenshot.png").expect("TODO: panic message");
         println!("Screenshot saved to screenshot.png");
     }
     Ok(())
