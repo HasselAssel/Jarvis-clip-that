@@ -1,4 +1,6 @@
 use std::{ptr, thread, thread::sleep, time::Duration};
+use std::cmp::max;
+use std::collections::VecDeque;
 use std::time::Instant;
 use windows::{
     core::{Error, HSTRING, Result},
@@ -14,6 +16,31 @@ use image::{ImageBuffer, Rgba};
 use windows::core::Interface;
 use windows::Win32::Foundation::HMODULE;
 use windows::Win32::Graphics::Direct3D::{D3D_DRIVER_TYPE_HARDWARE, D3D_FEATURE_LEVEL_10_0, D3D_FEATURE_LEVEL_11_0};
+
+struct ID3D11Texture2DOptionRingBuffer<const N: usize> {
+    data: [ID3D11Texture2D; N],
+    index: usize,
+}
+
+impl<const N: usize> ID3D11Texture2DOptionRingBuffer<N> {
+    unsafe fn new(device: &ID3D11Device, tex_desc: &D3D11_TEXTURE2D_DESC) -> Self {
+
+
+        Self { data: [
+            {let mut dest_texture = None;
+            device.CreateTexture2D(tex_desc, None, Some(&mut dest_texture)).unwrap();
+            dest_texture.unwrap()};
+            N], index: 0 }
+    }
+
+    #[inline(always)]
+    fn next(&mut self) -> &ID3D11Texture2D {
+        let santaclausiscommingtotownlalallalala = &self.data[self.index];
+        self.index = (self.index + 1) % N;
+        santaclausiscommingtotownlalallalala
+    }
+}
+
 
 /// Captures 10 desktop screenshots using DirectX desktop duplication,
 /// waits 10 seconds, then copies the first captured texture into a CPU-accessible staging texture.
@@ -53,6 +80,8 @@ pub unsafe fn capture_desktop_screenshots() -> Result<(ID3D11DeviceContext, ID3D
     let width = out_desc.ModeDesc.Width;
     let height = out_desc.ModeDesc.Height;
 
+
+    let mut hr: Result<()>;
     let mut frame_info = DXGI_OUTDUPL_FRAME_INFO::default();
     let mut tex: ID3D11Texture2D;
     let tex_desc = D3D11_TEXTURE2D_DESC {
@@ -68,13 +97,19 @@ pub unsafe fn capture_desktop_screenshots() -> Result<(ID3D11DeviceContext, ID3D
         MiscFlags: 0,
     };
 
-    let len = 100000;
-    let mut captured_textures = Vec::with_capacity(len);
+    const LEN:usize = 500;
+    let mut captured_textures = ID3D11Texture2DOptionRingBuffer::<LEN>::new(&device, &tex_desc);
+
+    let fps = 100;
+    let mspf = 1000 / fps;
+    println!("{}", mspf);
 
     let start_time = Instant::now();
-    for i in 0..len {
-        let mut resource = None;
-        let hr = duplication.AcquireNextFrame(0, &mut frame_info, &mut resource);
+    for _ in 0..LEN {
+        let destination = captured_textures.next();
+
+        let mut resource: Option<IDXGIResource> = None;
+        hr = duplication.AcquireNextFrame(mspf, &mut frame_info, &mut resource);
         if hr.is_err() {
             continue;
         }
@@ -85,21 +120,12 @@ pub unsafe fn capture_desktop_screenshots() -> Result<(ID3D11DeviceContext, ID3D
             }
             tex = dxgi_resource.cast()?;
 
-            // Create the destination texture
-            let mut dest_texture: Option<ID3D11Texture2D> = None;
-            device.CreateTexture2D(&tex_desc, None, Some(&mut dest_texture))?;
-            let dest_texture = dest_texture.unwrap();
-
             // Copy the acquired frame to the destination texture
-            context.CopyResource(&dest_texture, &tex);
-
-            // Store the copied texture
-            captured_textures.push(dest_texture);
+            context.CopyResource(destination, &tex);
         }
         duplication.ReleaseFrame()?;
     }
     println!("Time elapsed: {}", start_time.elapsed().as_millis());
-    println!("Captured textures: {:?}", captured_textures.len());
 
 
     // Create a staging texture (CPU-accessible) for one captured image.
@@ -121,7 +147,7 @@ pub unsafe fn capture_desktop_screenshots() -> Result<(ID3D11DeviceContext, ID3D
     let staging_texture = staging_texture.unwrap();
 
     // Copy the first captured frame into the staging texture.
-    if let Some(one_texture) = captured_textures.get(0) {
+    if let Some(one_texture) = captured_textures.data[0] {
         context.CopyResource(&staging_texture, one_texture);
     } else {
         return Err(Error::new(windows::core::HRESULT(0), "No screenshot was captured"));
