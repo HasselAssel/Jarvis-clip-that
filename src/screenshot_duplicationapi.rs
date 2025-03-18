@@ -17,27 +17,27 @@ use windows::core::Interface;
 use windows::Win32::Foundation::HMODULE;
 use windows::Win32::Graphics::Direct3D::{D3D_DRIVER_TYPE_HARDWARE, D3D_FEATURE_LEVEL_10_0, D3D_FEATURE_LEVEL_11_0};
 
-struct ID3D11Texture2DOptionRingBuffer<const N: usize> {
-    data: [ID3D11Texture2D; N],
+struct OptionalID3D11Texture2D {
+    tex: ID3D11Texture2D,
+    is_valid: bool,
+}
+
+struct OptionalID3D11Texture2DRingBuffer<const N: usize> {
+    data: [OptionalID3D11Texture2D; N],
     index: usize,
 }
 
-impl<const N: usize> ID3D11Texture2DOptionRingBuffer<N> {
+impl<const N: usize> OptionalID3D11Texture2DRingBuffer<N> {
     unsafe fn new(device: &ID3D11Device, tex_desc: &D3D11_TEXTURE2D_DESC) -> Self {
         Self {
             data: array::from_fn(|_|
-                {let mut dest_texture = None;
-                device.CreateTexture2D(tex_desc, None, Some(&mut dest_texture)).unwrap();
-                dest_texture.unwrap()}),
+                            {let mut dest_texture = None;
+                            device.CreateTexture2D(tex_desc, None, Some(&mut dest_texture)).unwrap();
+                                OptionalID3D11Texture2D{
+                                    tex: dest_texture.unwrap(),
+                                    is_valid: false}    }),
             index: 0
         }
-    }
-
-    #[inline(always)]
-    fn next(&mut self) -> &ID3D11Texture2D {
-        let santaclausiscommingtotownlalallalala = &self.data[self.index];
-        self.index = (self.index + 1) % N;
-        santaclausiscommingtotownlalallalala
     }
 }
 
@@ -81,6 +81,7 @@ pub unsafe fn capture_desktop_screenshots() -> Result<(ID3D11DeviceContext, ID3D
     let height = out_desc.ModeDesc.Height;
 
 
+    let mut resource: Option<IDXGIResource>;
     let mut hr: Result<()>;
     let mut frame_info = DXGI_OUTDUPL_FRAME_INFO::default();
     let mut tex: ID3D11Texture2D;
@@ -98,40 +99,55 @@ pub unsafe fn capture_desktop_screenshots() -> Result<(ID3D11DeviceContext, ID3D
     };
 
     const LEN:usize = 500;
-    //let mut captured_textures = ID3D11Texture2DOptionRingBuffer::<LEN>::new(&device, &tex_desc);
-    let mut captured_textures = Vec::with_capacity(LEN);
+    let mut captured_textures = OptionalID3D11Texture2DRingBuffer::<LEN>::new(&device, &tex_desc);
 
-    let fps = 100;
-    let mspf = 1000 / fps;
+    let fps:u32 = 24;
+    let mspf: u32 = 1000 / fps;
     println!("{}", mspf);
 
     let start_time = Instant::now();
+    let mut delta_start:Instant = Instant::now();
+    let mut delta_time: i64 = 100000;
+    let mut catchup_time: i64 = 0;
+    let mut elapsed: u128;
     for _ in 0..LEN {
-        let mut resource: Option<IDXGIResource> = None;
+        elapsed = delta_start.elapsed().as_millis();
+        delta_start = Instant::now(); // not here!
+        delta_time = mspf as i64 - elapsed as i64 + catchup_time;
+        if delta_time > 0 {
+            sleep(Duration::from_millis(delta_time as u64));
+            catchup_time = 0;
+        } else {
+            catchup_time = delta_time;
+        }
+
+        resource = None;
         hr = duplication.AcquireNextFrame(mspf, &mut frame_info, &mut resource);
         if hr.is_err() {
+            captured_textures.data[captured_textures.index].is_valid = false;
+            captured_textures.index += 1;
+            println!("why???");
             continue;
         }
         if let Some(dxgi_resource) = resource {
             if frame_info.AccumulatedFrames == 0 {
                 duplication.ReleaseFrame()?;
+                captured_textures.data[captured_textures.index].is_valid = false;
+                captured_textures.index += 1;
                 continue;
             }
             tex = dxgi_resource.cast()?;
 
             // Copy the acquired frame to the destination texture
-            let mut dest_texture = None;
-            device.CreateTexture2D(&tex_desc, None, Some(&mut dest_texture)).unwrap();
-            let dest_texture = dest_texture.unwrap();
-
-            context.CopyResource(&dest_texture, &tex);
-            captured_textures.push(dest_texture);
+            context.CopyResource(&captured_textures.data[captured_textures.index].tex, &tex);
+            captured_textures.data[captured_textures.index].is_valid = true;
+            captured_textures.index += 1;
 
         }
         duplication.ReleaseFrame()?;
     }
-    println!("Time elapsed: {}", start_time.elapsed().as_millis());
-    println!("Frames captured: {}", captured_textures.len());
+    println!("Time elapsed: {}", start_time.elapsed().as_millis()); println!("Delta time: {}", delta_time );
+    println!("Frames captured: {}", captured_textures.index); println!("FPS: {}", (captured_textures.index as u128 * 1000) / start_time.elapsed().as_millis() );
 
 
     // Create a staging texture (CPU-accessible) for one captured image.
@@ -153,8 +169,8 @@ pub unsafe fn capture_desktop_screenshots() -> Result<(ID3D11DeviceContext, ID3D
     let staging_texture = staging_texture.unwrap();
 
     // Copy the first captured frame into the staging texture.
-    if let Some(one_texture) = captured_textures.get(0) {
-        context.CopyResource(&staging_texture, one_texture);
+    if let one_texture = &captured_textures.data[0] {
+        context.CopyResource(&staging_texture, &one_texture.tex);
     } else {
         return Err(Error::new(windows::core::HRESULT(0), "No screenshot was captured"));
     }
