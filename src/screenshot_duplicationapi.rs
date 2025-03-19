@@ -42,9 +42,6 @@ impl<const N: usize> OptionalID3D11Texture2DRingBuffer<N> {
 }
 
 
-/// Captures 10 desktop screenshots using DirectX desktop duplication,
-/// waits 10 seconds, then copies the first captured texture into a CPU-accessible staging texture.
-/// Returns the device context and the staging texture.
 pub unsafe fn capture_desktop_screenshots() -> Result<(ID3D11DeviceContext, ID3D11Texture2D)> {
     sleep(Duration::from_millis(2000));
 
@@ -98,30 +95,26 @@ pub unsafe fn capture_desktop_screenshots() -> Result<(ID3D11DeviceContext, ID3D
         MiscFlags: 0,
     };
 
-    const LEN:usize = 500;
+    const LEN: usize = 500;
     let mut captured_textures = OptionalID3D11Texture2DRingBuffer::<LEN>::new(&device, &tex_desc);
 
-    let fps:u32 = 24;
+    let fps: u32 = 24;
     let mspf: u32 = 1000 / fps;
+    let frame_duration = Duration::from_millis(mspf);
     println!("{}", mspf);
 
+    
+    let mut elapsed: Duration;
+    let mut expected_elapsed: Duration;
     let start_time = Instant::now();
-    let mut delta_start:Instant = Instant::now();
-    let mut delta_time: i64 = 100000;
-    let mut catchup_time: i64 = 0;
-    let mut elapsed: u128;
-    for _ in 0..LEN {
-        elapsed = delta_start.elapsed().as_millis();
-        delta_start = Instant::now(); // not here!
-        delta_time = mspf as i64 - elapsed as i64 + catchup_time;
-        if delta_time > 0 {
-            sleep(Duration::from_millis(delta_time as u64));
-            catchup_time = 0;
-        } else {
-            catchup_time = delta_time;
+    for n in 0..LEN {
+        elapsed = start_time.elapsed();
+        expected_elapsed = frame_time.saturating_mul(n);
+        if expected_elapsed > elapsed {
+            sleep(expected_elapsed - elapsed);
         }
 
-        resource = None;
+        resource = None; // maybe removeable?
         hr = duplication.AcquireNextFrame(mspf, &mut frame_info, &mut resource);
         if hr.is_err() {
             captured_textures.data[captured_textures.index].is_valid = false;
