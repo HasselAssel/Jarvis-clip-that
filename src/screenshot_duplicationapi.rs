@@ -41,8 +41,7 @@ impl<const N: usize> OptionalID3D11Texture2DRingBuffer<N> {
     }
 }
 
-
-pub unsafe fn capture_desktop_screenshots() -> Result<(ID3D11DeviceContext, ID3D11Texture2D)> {
+pub unsafe fn screenshot_duplicationapi_main() -> Result<()>{
     sleep(Duration::from_millis(2000));
 
     // Create D3D11 device and immediate context.
@@ -77,11 +76,6 @@ pub unsafe fn capture_desktop_screenshots() -> Result<(ID3D11DeviceContext, ID3D
     let width = out_desc.ModeDesc.Width;
     let height = out_desc.ModeDesc.Height;
 
-
-    let mut resource: Option<IDXGIResource>;
-    let mut hr: Result<()>;
-    let mut frame_info = DXGI_OUTDUPL_FRAME_INFO::default();
-    let mut tex: ID3D11Texture2D;
     let tex_desc = D3D11_TEXTURE2D_DESC {
         Width: width,
         Height: height,
@@ -95,31 +89,44 @@ pub unsafe fn capture_desktop_screenshots() -> Result<(ID3D11DeviceContext, ID3D
         MiscFlags: 0,
     };
 
-    const LEN: usize = 500;
+    const LEN: usize = 100;
     let mut captured_textures = OptionalID3D11Texture2DRingBuffer::<LEN>::new(&device, &tex_desc);
+
+    let idk = capture_desktop_screenshots(&mut captured_textures, &duplication, context);
+
+    Ok(())
+}
+
+
+pub unsafe fn capture_desktop_screenshots<const LEN: usize>(captured_textures: &mut OptionalID3D11Texture2DRingBuffer<LEN>, duplication: &IDXGIOutputDuplication, context: ID3D11DeviceContext) -> Result<()>/*Result<(ID3D11DeviceContext, ID3D11Texture2D)>*/ {
+    let mut resource: Option<IDXGIResource>;
+    let mut hr: Result<()>;
+    let mut frame_info = DXGI_OUTDUPL_FRAME_INFO::default();
+    let mut tex: ID3D11Texture2D;
+
 
     let fps: u32 = 24;
     let mspf: u32 = 1000 / fps;
-    let frame_duration = Duration::from_millis(mspf);
-    println!("{}", mspf);
-
+    let frame_duration = Duration::from_millis(mspf as u64);
+    println!("ms/f{}", mspf);
     
     let mut elapsed: Duration;
     let mut expected_elapsed: Duration;
     let start_time = Instant::now();
     for n in 0..LEN {
         elapsed = start_time.elapsed();
-        expected_elapsed = frame_time.saturating_mul(n);
+        expected_elapsed = frame_duration.saturating_mul(n as u32);
+        println!("{:?}, {:?}", elapsed, expected_elapsed);
         if expected_elapsed > elapsed {
             sleep(expected_elapsed - elapsed);
         }
 
-        resource = None; // maybe removeable?
-        hr = duplication.AcquireNextFrame(mspf, &mut frame_info, &mut resource);
+        resource = None; // maybe removable?
+        hr = duplication.AcquireNextFrame(0/*mspf*/, &mut frame_info, &mut resource);
         if hr.is_err() {
             captured_textures.data[captured_textures.index].is_valid = false;
             captured_textures.index += 1;
-            println!("why???");
+            println!("why???:{:?}", hr);
             continue;
         }
         if let Some(dxgi_resource) = resource {
@@ -139,10 +146,12 @@ pub unsafe fn capture_desktop_screenshots() -> Result<(ID3D11DeviceContext, ID3D
         }
         duplication.ReleaseFrame()?;
     }
-    println!("Time elapsed: {}", start_time.elapsed().as_millis()); println!("Delta time: {}", delta_time );
-    println!("Frames captured: {}", captured_textures.index); println!("FPS: {}", (captured_textures.index as u128 * 1000) / start_time.elapsed().as_millis() );
+    println!("Time elapsed: {}", start_time.elapsed().as_millis());
+    println!("Frames captured: {}", captured_textures.index);
+    println!("FPS: {}", (captured_textures.index as u128 * 1000) / start_time.elapsed().as_millis() ); println!("SPF: {}", (captured_textures.index as u128 * 1000) / start_time.elapsed().as_millis() );
 
-
+    Ok(())
+    /*
     // Create a staging texture (CPU-accessible) for one captured image.
     let tex_desc = D3D11_TEXTURE2D_DESC {
         Width: width,
@@ -168,7 +177,7 @@ pub unsafe fn capture_desktop_screenshots() -> Result<(ID3D11DeviceContext, ID3D
         return Err(Error::new(windows::core::HRESULT(0), "No screenshot was captured"));
     }
 
-    Ok((context, staging_texture))
+    Ok((context, staging_texture))*/
 }
 
 
