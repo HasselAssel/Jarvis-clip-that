@@ -1,6 +1,7 @@
 use std::{array, ptr, thread, thread::sleep, time::Duration};
 use std::cmp::max;
 use std::collections::VecDeque;
+use std::sync::{Arc, Mutex};
 use std::time::Instant;
 use windows::{
     core::{Error, HSTRING, Result},
@@ -90,20 +91,19 @@ pub unsafe fn screenshot_duplicationapi_main() -> Result<()>{
     };
 
     const LEN: usize = 100;
-    let mut captured_textures = OptionalID3D11Texture2DRingBuffer::<LEN>::new(&device, &tex_desc);
-
-    let idk = capture_desktop_screenshots(&mut captured_textures, &duplication, context);
+    let _captured_textures = OptionalID3D11Texture2DRingBuffer::<LEN>::new(&device, &tex_desc);
+    let mut captured_textures = Arc::new(Mutex::new(_captured_textures));
+    let idk = capture_desktop_screenshots(&mut captured_textures, &duplication, context)?;
 
     Ok(())
 }
 
 
-pub unsafe fn capture_desktop_screenshots<const LEN: usize>(captured_textures: &mut OptionalID3D11Texture2DRingBuffer<LEN>, duplication: &IDXGIOutputDuplication, context: ID3D11DeviceContext) -> Result<()>/*Result<(ID3D11DeviceContext, ID3D11Texture2D)>*/ {
+pub unsafe fn capture_desktop_screenshots<const LEN: usize>(arc_mut_captured_textures: &mut Arc<Mutex<OptionalID3D11Texture2DRingBuffer<LEN>>>, duplication: &IDXGIOutputDuplication, context: ID3D11DeviceContext) -> Result<()> {
     let mut resource: Option<IDXGIResource>;
     let mut hr: Result<()>;
     let mut frame_info = DXGI_OUTDUPL_FRAME_INFO::default();
     let mut tex: ID3D11Texture2D;
-
 
     let fps: u32 = 24;
     let mspf: u32 = 1000 / fps;
@@ -112,44 +112,54 @@ pub unsafe fn capture_desktop_screenshots<const LEN: usize>(captured_textures: &
     
     let mut elapsed: Duration;
     let mut expected_elapsed: Duration;
-    let start_time = Instant::now();
-    for n in 0..LEN {
-        elapsed = start_time.elapsed();
-        expected_elapsed = frame_duration.saturating_mul(n as u32);
-        println!("{:?}, {:?}", elapsed, expected_elapsed);
-        if expected_elapsed > elapsed {
-            sleep(expected_elapsed - elapsed);
-        }
+    let mut start_time: Instant;
+    loop {
+        start_time = Instant::now();
+        for n in 0..LEN {
+            elapsed = start_time.elapsed();
+            expected_elapsed = frame_duration.saturating_mul(n as u32);
+            println!("{:?}, {:?}", elapsed, expected_elapsed);
+            if expected_elapsed > elapsed {
+                sleep(expected_elapsed - elapsed);
+            }
 
-        resource = None; // maybe removable?
-        hr = duplication.AcquireNextFrame(0/*mspf*/, &mut frame_info, &mut resource);
-        if hr.is_err() {
-            captured_textures.data[captured_textures.index].is_valid = false;
-            captured_textures.index += 1;
-            println!("why???:{:?}", hr);
-            continue;
-        }
-        if let Some(dxgi_resource) = resource {
-            if frame_info.AccumulatedFrames == 0 {
-                duplication.ReleaseFrame()?;
+            resource = None; // maybe removable?
+            hr = duplication.AcquireNextFrame(0/*mspf*/, &mut frame_info, &mut resource);
+            if hr.is_err() {
+                let captured_textures = arc_mut_captured_textures.lock().unwrap();
                 captured_textures.data[captured_textures.index].is_valid = false;
                 captured_textures.index += 1;
+                drop(captured_textures);
+                println!("why???:{:?}", hr);
                 continue;
             }
-            tex = dxgi_resource.cast()?;
+            if let Some(dxgi_resource) = resource {
+                if frame_info.AccumulatedFrames == 0 {
+                    duplication.ReleaseFrame()?;
+                    let captured_textures = arc_mut_captured_textures.lock().unwrap();
+                    captured_textures.data[captured_textures.index].is_valid = false;
+                    captured_textures.index += 1;
+                    drop(captured_textures);
+                    continue;
+                }
+                tex = dxgi_resource.cast()?;
 
-            // Copy the acquired frame to the destination texture
-            context.CopyResource(&captured_textures.data[captured_textures.index].tex, &tex);
-            captured_textures.data[captured_textures.index].is_valid = true;
-            captured_textures.index += 1;
-
+                // Copy the acquired frame to the destination texture
+                let mut captured_textures = arc_mut_captured_textures.lock().unwrap();
+                context.CopyResource(&captured_textures.data[captured_textures.index].tex, &tex);
+                captured_textures.data[captured_textures.index].is_valid = true;
+                captured_textures.index += 1;
+                drop(captured_textures);
+            }
+            duplication.ReleaseFrame()?;
         }
-        duplication.ReleaseFrame()?;
+        let captured_textures = arc_mut_captured_textures.lock().unwrap();
+        println!("Time elapsed: {}", start_time.elapsed().as_millis());
+        println!("Frames captured: {}", captured_textures.index);
+        println!("FPS: {}", (captured_textures.index as u128 * 1000) / start_time.elapsed().as_millis());
+        println!("SPF: {}", (captured_textures.index as u128 * 1000) / start_time.elapsed().as_millis());
+        drop(captured_textures);
     }
-    println!("Time elapsed: {}", start_time.elapsed().as_millis());
-    println!("Frames captured: {}", captured_textures.index);
-    println!("FPS: {}", (captured_textures.index as u128 * 1000) / start_time.elapsed().as_millis() ); println!("SPF: {}", (captured_textures.index as u128 * 1000) / start_time.elapsed().as_millis() );
-
     Ok(())
     /*
     // Create a staging texture (CPU-accessible) for one captured image.
