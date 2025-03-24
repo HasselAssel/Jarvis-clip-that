@@ -17,7 +17,7 @@ fn main() {
 fn directx_try() -> Result<(), windows::core::Error> {
     unsafe {
         // Capture the desktop and obtain the context and staging texture.
-        let v = screenshot_duplicationapi::screenshot_duplicationapi_main()?;
+        let v = screenshot_duplicationapi::screenshot_duplication_api_main()?;
         // Save the staging texture as a PNG file.
         //screenshot_duplicationapi::save_texture_to_png(&v.0, &v.1, "out/screenshot.png").expect("TODO: panic message");
         //println!("Screenshot saved to screenshot.png");

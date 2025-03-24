@@ -1,7 +1,9 @@
 use std::{array, ptr, thread, thread::sleep, time::Duration};
+use std::cell::UnsafeCell;
 use std::cmp::max;
 use std::collections::VecDeque;
-use std::sync::{Arc, Mutex};
+use std::ops::Index;
+use std::sync::{Arc, Mutex, RwLock};
 use std::time::Instant;
 use windows::{
     core::{Error, HSTRING, Result},
@@ -23,26 +25,67 @@ struct OptionalID3D11Texture2D {
     is_valid: bool,
 }
 
-struct OptionalID3D11Texture2DRingBuffer<const N: usize> {
-    data: [OptionalID3D11Texture2D; N],
-    index: usize,
+struct OptionalID3D11Texture2DRingBuffer<const LEN: usize> {
+    data: [RwLock<OptionalID3D11Texture2D>; LEN],
+    index: RwLock<usize>,
 }
 
-impl<const N: usize> OptionalID3D11Texture2DRingBuffer<N> {
+impl<const LEN: usize> OptionalID3D11Texture2DRingBuffer<LEN> {
     unsafe fn new(device: &ID3D11Device, tex_desc: &D3D11_TEXTURE2D_DESC) -> Self {
         Self {
             data: array::from_fn(|_|
                             {let mut dest_texture = None;
                             device.CreateTexture2D(tex_desc, None, Some(&mut dest_texture)).unwrap();
-                                OptionalID3D11Texture2D{
-                                    tex: dest_texture.unwrap(),
-                                    is_valid: false}    }),
-            index: 0
+                                RwLock::new(OptionalID3D11Texture2D{
+                                            tex: dest_texture.unwrap(),
+                                            is_valid: false}) }),
+            index: RwLock::new(LEN)
         }
+    }
+
+    unsafe fn copy_out<const N_LEN: usize>(&self, buffer: &OptionalID3D11Texture2DRingBuffer<N_LEN>, context: &ID3D11DeviceContext) {
+        if N_LEN <= LEN {println!("U tryna copy elements that haven't even existed");}
+
+        let index_guard = self.index.read().unwrap();
+        let start_index = (*index_guard + 2) % LEN;
+        drop(index_guard);
+
+        for i in 0..N_LEN {
+            let index = (start_index + i) % LEN;
+            let texture_guard = self.data[index].read().unwrap();
+            let mut buffer_texture_guard = buffer.data[i].write().unwrap();
+            context.CopyResource(&buffer_texture_guard.tex, &texture_guard.tex);
+            buffer_texture_guard.is_valid = true;
+
+            drop(texture_guard);
+            drop(buffer_texture_guard);
+        }
+    }
+
+    unsafe fn copy_into(&mut self, context: &ID3D11DeviceContext, tex: &ID3D11Texture2D) {
+        let index_guard = self.index.read().unwrap();
+        let index = *index_guard;
+        drop(index_guard);
+
+        let mut texture_guard = self.data[index].write().unwrap();
+        context.CopyResource(&texture_guard.tex, &texture_guard.tex);
+        texture_guard.is_valid = true;
+        drop(texture_guard);
+    }
+
+    fn skip_current(&mut self) {
+        let mut index_guard = self.index.write().unwrap();
+        *index_guard = (*index_guard + 1) % LEN;
+        let index = *index_guard;
+        drop(index_guard);
+
+        let mut texture_guard = self.data[index].write().unwrap();
+        texture_guard.is_valid = false;
+        drop(texture_guard);
     }
 }
 
-pub unsafe fn screenshot_duplicationapi_main() -> Result<()>{
+pub unsafe fn screenshot_duplication_api_main() -> Result<()>{
     sleep(Duration::from_millis(2000));
 
     // Create D3D11 device and immediate context.
@@ -91,15 +134,18 @@ pub unsafe fn screenshot_duplicationapi_main() -> Result<()>{
     };
 
     const LEN: usize = 100;
-    let _captured_textures = OptionalID3D11Texture2DRingBuffer::<LEN>::new(&device, &tex_desc);
-    let mut captured_textures = Arc::new(Mutex::new(_captured_textures));
-    let idk = capture_desktop_screenshots(&mut captured_textures, &duplication, context)?;
+
+    let buf = OptionalID3D11Texture2DRingBuffer::<LEN>::new(&device, &tex_desc);
+    let mut arcunc = Arc::new(UnsafeCell::new(buf));
+    let idk = thread::spawn(move || unsafe{
+            let _ = capture_desktop_screenshots(&mut arcunc, &duplication, &context);
+        });
 
     Ok(())
 }
 
 
-pub unsafe fn capture_desktop_screenshots<const LEN: usize>(arc_mut_captured_textures: &mut Arc<Mutex<OptionalID3D11Texture2DRingBuffer<LEN>>>, duplication: &IDXGIOutputDuplication, context: ID3D11DeviceContext) -> Result<()> {
+pub unsafe fn capture_desktop_screenshots<const LEN: usize>(arc_captured_textures: &mut Arc<UnsafeCell<OptionalID3D11Texture2DRingBuffer<LEN>>>, duplication: &IDXGIOutputDuplication, context: &ID3D11DeviceContext) -> Result<()> {
     let mut resource: Option<IDXGIResource>;
     let mut hr: Result<()>;
     let mut frame_info = DXGI_OUTDUPL_FRAME_INFO::default();
@@ -115,50 +161,39 @@ pub unsafe fn capture_desktop_screenshots<const LEN: usize>(arc_mut_captured_tex
     let mut start_time: Instant;
     loop {
         start_time = Instant::now();
-        for n in 0..LEN {
+        for n in 0..fps {
             elapsed = start_time.elapsed();
-            expected_elapsed = frame_duration.saturating_mul(n as u32);
+            expected_elapsed = frame_duration.saturating_mul(n);
             println!("{:?}, {:?}", elapsed, expected_elapsed);
             if expected_elapsed > elapsed {
                 sleep(expected_elapsed - elapsed);
             }
 
+            arc_captured_textures.skip_current();
+
             resource = None; // maybe removable?
-            hr = duplication.AcquireNextFrame(0/*mspf*/, &mut frame_info, &mut resource);
+            hr = duplication.AcquireNextFrame(0, &mut frame_info, &mut resource);
             if hr.is_err() {
-                let captured_textures = arc_mut_captured_textures.lock().unwrap();
-                captured_textures.data[captured_textures.index].is_valid = false;
-                captured_textures.index += 1;
-                drop(captured_textures);
                 println!("why???:{:?}", hr);
                 continue;
             }
             if let Some(dxgi_resource) = resource {
                 if frame_info.AccumulatedFrames == 0 {
                     duplication.ReleaseFrame()?;
-                    let captured_textures = arc_mut_captured_textures.lock().unwrap();
-                    captured_textures.data[captured_textures.index].is_valid = false;
-                    captured_textures.index += 1;
-                    drop(captured_textures);
                     continue;
                 }
                 tex = dxgi_resource.cast()?;
 
                 // Copy the acquired frame to the destination texture
-                let mut captured_textures = arc_mut_captured_textures.lock().unwrap();
-                context.CopyResource(&captured_textures.data[captured_textures.index].tex, &tex);
-                captured_textures.data[captured_textures.index].is_valid = true;
-                captured_textures.index += 1;
-                drop(captured_textures);
+                //context.CopyResource(&captured_textures.get_current(), &tex);
+                arc_captured_textures.copy_into(&context, &tex);
             }
             duplication.ReleaseFrame()?;
         }
-        let captured_textures = arc_mut_captured_textures.lock().unwrap();
-        println!("Time elapsed: {}", start_time.elapsed().as_millis());
-        println!("Frames captured: {}", captured_textures.index);
+        /*println!("Time elapsed: {}", start_time.elapsed().as_millis());
+        println!("Frames captured (index): {}", captured_textures.index);
         println!("FPS: {}", (captured_textures.index as u128 * 1000) / start_time.elapsed().as_millis());
-        println!("SPF: {}", (captured_textures.index as u128 * 1000) / start_time.elapsed().as_millis());
-        drop(captured_textures);
+        println!("SPF: {}", (captured_textures.index as u128 * 1000) / start_time.elapsed().as_millis());*/
     }
     Ok(())
     /*
