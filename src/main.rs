@@ -1,9 +1,9 @@
 use std::time::Instant;
+use capturer::screenshot_duplicationapi;
 
 mod screenshot_winapi;
 mod video;
-mod screenshot_duplicationapi;
-
+mod capturer;
 
 fn main() {
     //capture_one();
