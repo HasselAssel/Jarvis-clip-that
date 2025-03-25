@@ -68,7 +68,7 @@ impl<const LEN: usize> OptionalID3D11Texture2DRingBuffer<LEN> {
         drop(index_guard);
 
         let mut texture_guard = self.data[index].write().unwrap();
-        context.CopyResource(&texture_guard.tex, &texture_guard.tex);
+        context.CopyResource(&texture_guard.tex, tex);
         texture_guard.is_valid = true;
         drop(texture_guard);
     }
@@ -135,17 +135,18 @@ pub unsafe fn screenshot_duplication_api_main() -> Result<()>{
 
     const LEN: usize = 100;
 
-    let buf = OptionalID3D11Texture2DRingBuffer::<LEN>::new(&device, &tex_desc);
-    let mut arcunc = Arc::new(UnsafeCell::new(buf));
-    let idk = thread::spawn(move || unsafe{
-            let _ = capture_desktop_screenshots(&mut arcunc, &duplication, &context);
+    let mut buf = OptionalID3D11Texture2DRingBuffer::<LEN>::new(&device, &tex_desc);
+    let ptr: usize = (&mut buf as *mut OptionalID3D11Texture2DRingBuffer::<LEN>) as usize;
+    let idk = thread::spawn(move || {
+        let bufa = ptr as *mut OptionalID3D11Texture2DRingBuffer::<LEN>;
+            let _ = capture_desktop_screenshots(bufa, &duplication, &context);
         });
 
     Ok(())
 }
 
 
-pub unsafe fn capture_desktop_screenshots<const LEN: usize>(arc_captured_textures: &mut Arc<UnsafeCell<OptionalID3D11Texture2DRingBuffer<LEN>>>, duplication: &IDXGIOutputDuplication, context: &ID3D11DeviceContext) -> Result<()> {
+pub unsafe fn capture_desktop_screenshots<const LEN: usize>(arc_captured_textures: *mut OptionalID3D11Texture2DRingBuffer<LEN>, duplication: &IDXGIOutputDuplication, context: &ID3D11DeviceContext) -> Result<()> {
     let mut resource: Option<IDXGIResource>;
     let mut hr: Result<()>;
     let mut frame_info = DXGI_OUTDUPL_FRAME_INFO::default();
@@ -169,7 +170,7 @@ pub unsafe fn capture_desktop_screenshots<const LEN: usize>(arc_captured_texture
                 sleep(expected_elapsed - elapsed);
             }
 
-            arc_captured_textures.skip_current();
+            (*arc_captured_textures).skip_current();
 
             resource = None; // maybe removable?
             hr = duplication.AcquireNextFrame(0, &mut frame_info, &mut resource);
@@ -186,7 +187,7 @@ pub unsafe fn capture_desktop_screenshots<const LEN: usize>(arc_captured_texture
 
                 // Copy the acquired frame to the destination texture
                 //context.CopyResource(&captured_textures.get_current(), &tex);
-                arc_captured_textures.copy_into(&context, &tex);
+                (*arc_captured_textures).copy_into(&context, &tex);
             }
             duplication.ReleaseFrame()?;
         }
