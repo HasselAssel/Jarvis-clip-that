@@ -1,68 +1,171 @@
-use std::array;
-use std::sync::RwLock;
-use windows::Win32::Graphics::Direct3D11::{ID3D11Device, ID3D11DeviceContext, ID3D11Texture2D, D3D11_TEXTURE2D_DESC};
+use std::collections::VecDeque;
+use std::ops::{Deref, DerefMut};
 
-struct OptionalID3D11Texture2D {
-    tex: ID3D11Texture2D,
-    is_valid: bool,
+pub struct PacketWrapper {
+    frame_amount: i32,
+    buffer: ffmpeg_next::codec::packet::Packet,
 }
 
-pub struct OptionalID3D11Texture2DRingBuffer<const LEN: usize> {
-    data: [RwLock<OptionalID3D11Texture2D>; LEN],
-    index: RwLock<usize>,
+pub struct PacketWrappersWrapper {
+    frame_amount: i32,
+    buffer: Vec<PacketWrapper>,
 }
 
-impl<const LEN: usize> OptionalID3D11Texture2DRingBuffer<LEN> {
-    pub unsafe fn new(device: &ID3D11Device, tex_desc: &D3D11_TEXTURE2D_DESC) -> Self {
+pub struct RingBuffer {
+    frame_counter: i32,
+    buffer: VecDeque<PacketWrappersWrapper>,
+    min_frame_amount: i32,
+}
+
+impl PacketWrapper {
+    pub fn new(frame_amount: i32, buffer: ffmpeg_next::codec::packet::Packet) -> Self {
         Self {
-            data: array::from_fn(|_|
-                {let mut dest_texture = None;
-                    device.CreateTexture2D(tex_desc, None, Some(&mut dest_texture)).unwrap();
-                    RwLock::new(OptionalID3D11Texture2D{
-                        tex: dest_texture.unwrap(),
-                        is_valid: false}) }),
-            index: RwLock::new(LEN)
+            frame_amount,
+            buffer,
+        }
+    }
+}
+
+impl PacketWrappersWrapper {
+    pub fn new() -> Self {
+        Self {
+            frame_amount: 0,
+            buffer: Vec::new(),
         }
     }
 
-    pub unsafe fn copy_out<const N_LEN: usize>(&self, buffer: &mut OptionalID3D11Texture2DRingBuffer<N_LEN>, context: &ID3D11DeviceContext) {
-        if N_LEN > LEN { println!("U tryna copy elements that haven't even existed"); }
+    pub fn insert(&mut self, packet: PacketWrapper) {
+        self.frame_amount += packet.frame_amount;
+        self.buffer.push(packet);
+    }
+}
 
-        let index_guard = self.index.read().unwrap();
-        let start_index = (*index_guard + 2) % LEN;
-        drop(index_guard);
-
-        for i in start_index..(N_LEN+start_index) {
-            let index = i % LEN;
-            let texture_guard = self.data[index].read().unwrap();
-            let mut buffer_texture_guard = buffer.data[i].write().unwrap();
-            context.CopyResource(&buffer_texture_guard.tex, &texture_guard.tex);
-            buffer_texture_guard.is_valid = true;
-
-            drop(texture_guard);
-            drop(buffer_texture_guard);
+impl RingBuffer {
+    pub fn new(requested_frame_amount: i32) -> Self {
+        Self {
+            frame_counter: 0,
+            buffer: VecDeque::new(),
+            min_frame_amount: requested_frame_amount,
         }
     }
+    
+    pub fn insert(&mut self, packet: PacketWrapper) {
+        self.frame_counter += packet.frame_amount;
 
-    pub unsafe fn copy_into(&mut self, context: &ID3D11DeviceContext, tex: &ID3D11Texture2D) {
-        let index_guard = self.index.read().unwrap();
-        let index = *index_guard;
-        drop(index_guard);
+        while let Some(front) = self.buffer.front_mut() {
+            if self.frame_counter - front.frame_amount > self.min_frame_amount {
+                self.frame_counter -= front.frame_amount;
+                self.buffer.pop_front();
+            } else {
+                break;
+            }
+        }
 
-        let mut texture_guard = self.data[index].write().unwrap();
-        context.CopyResource(&texture_guard.tex, tex);
-        texture_guard.is_valid = true;
-        drop(texture_guard);
+        let mut packet_wrappers_wrapper = {
+            let reuse = self.buffer.back()
+                .map(|back| packet.flags().bits() != ffmpeg_next::ffi::AV_PKT_FLAG_KEY)
+                .unwrap_or(false);
+            if reuse {
+                self.buffer.back_mut()
+            } else {
+                self.buffer.push_back(PacketWrappersWrapper::new());
+                self.buffer.back_mut()
+            }
+        }.unwrap();
+
+        packet_wrappers_wrapper.insert(packet);
     }
 
-    pub fn skip_current(&mut self) {
-        let mut index_guard = self.index.write().unwrap();
-        *index_guard = (*index_guard + 1) % LEN;
-        let index = *index_guard;
-        drop(index_guard);
+    pub fn get_slice(&self, min_requested_frames: Option<i32>) -> Vec<ffmpeg_next::codec::packet::Packet> {
+        if let Some(min_requested_frames) = min_requested_frames {
+            let mut i: usize = 0;
+            let mut frames = 0;
+            let mut vec = Vec::new();
+            while min_requested_frames > frames {
+                let pww = &self.buffer[i];
+                vec.extend(pww.buffer.iter().map(|a| a.buffer.clone()));
+                i += 1;
+                frames += pww.frame_amount;
+            }
+            vec
+        } else {
+            let mut packets: Vec<ffmpeg_next::codec::packet::Packet> = self.buffer.iter().flat_map(|b| b.buffer.iter().map(|b| b.buffer.clone())).collect();
+            let pts_offset: i64 = packets.iter().map(|a| a.pts().unwrap_or(i64::MAX)).min().unwrap();
+            println!("MIN PTS VALUE {}", pts_offset);
+            let _ = packets.iter_mut().for_each(|mut a| {
+                if let Some(pts) = a.pts() { a.set_pts(Some(pts - pts_offset)); }
+                if let Some(dts) = a.dts() { a.set_dts(Some(dts - pts_offset)); }
+            });
+            packets
+        }
+    }
+}
 
-        let mut texture_guard = self.data[index].write().unwrap();
-        texture_guard.is_valid = false;
-        drop(texture_guard);
+impl Deref for PacketWrapper {
+    type Target = ffmpeg_next::packet::Packet;
+
+    fn deref(&self) -> &Self::Target {
+        &self.buffer
+    }
+}
+
+impl Deref for PacketWrappersWrapper {
+    type Target = Vec<PacketWrapper>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.buffer
+    }
+}
+
+impl Deref for RingBuffer {
+    type Target = VecDeque<PacketWrappersWrapper>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.buffer
+    }
+}
+
+impl DerefMut for PacketWrapper {
+    fn deref_mut(&mut self) -> &mut ffmpeg_next::packet::Packet {
+        &mut self.buffer
+    }
+}
+
+impl DerefMut for PacketWrappersWrapper {
+    fn deref_mut(&mut self) -> &mut Vec<PacketWrapper> {
+        &mut self.buffer
+    }
+}
+
+impl DerefMut for RingBuffer {
+    fn deref_mut(&mut self) -> &mut VecDeque<PacketWrappersWrapper> {
+        &mut self.buffer
+    }
+}
+
+impl<'a> IntoIterator for &'a mut PacketWrappersWrapper {
+    type Item = &'a mut PacketWrapper;
+    type IntoIter = std::slice::IterMut<'a, PacketWrapper>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.buffer.iter_mut()
+    }
+}
+
+impl<'a> IntoIterator for &'a PacketWrappersWrapper {
+    type Item = &'a PacketWrapper;
+    type IntoIter = std::slice::Iter<'a, PacketWrapper>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.buffer.iter()
+    }
+}
+
+impl Clone for PacketWrapper {
+    fn clone(&self) -> Self {
+        Self {
+            frame_amount: self.frame_amount,
+            buffer: self.buffer.clone(),
+        }
     }
 }
