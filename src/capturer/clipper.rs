@@ -49,10 +49,10 @@ impl Clipper {
     pub fn start(self) {
         let capture_join = self.capturer.start_capturing();
         let listen_join = self.key_listener.start_key_listener();
-        let audio_join = self.audio_capturer.start_capturing();
+        //let audio_join = self.audio_capturer.start_capturing();
 
         capture_join.join().unwrap().unwrap();
         listen_join.join().unwrap();
-        audio_join.join().unwrap().unwrap();
+        //audio_join.join().unwrap().unwrap();
     }
 }

@@ -76,9 +76,9 @@ impl Saver {
         let video_packets = ring_buffer.get_slice(min_requested_frames);
         drop(ring_buffer);
 
-        let ring_buffer = self.audio_ring_buffer.lock().unwrap();
+        /*let ring_buffer = self.audio_ring_buffer.lock().unwrap();
         let audio_packets = ring_buffer.get_slice(min_requested_frames);
-        drop(ring_buffer);
+        drop(ring_buffer);*/
 
 
         let mut video_encoder_guard = self.video_encoder.lock().unwrap();
@@ -87,27 +87,27 @@ impl Saver {
         let video_codec_id = video_encoder.codec().unwrap().id();
 
         let mut video_ost = octx.add_stream(ffmpeg_next::codec::encoder::find(video_codec_id))?;
-        video_ost.set_parameters(&video_encoder);
+        video_ost.set_parameters(video_encoder);
         video_ost.set_time_base(video_input_tb);
         drop(video_encoder_guard);
 
 
-        let mut audio_encoder_guard = self.audio_encoder.lock().unwrap();
+        /*let mut audio_encoder_guard = self.audio_encoder.lock().unwrap();
         let audio_encoder = &mut *audio_encoder_guard;
         let audio_input_tb = audio_encoder.time_base();
         let audio_codec_id = audio_encoder.codec().unwrap().id();
 
         let mut audio_ost = octx.add_stream(ffmpeg_next::codec::encoder::find(audio_codec_id))?;
+        audio_ost.set_parameters(audio_encoder);
         audio_ost.set_time_base(audio_input_tb);
-        audio_ost.set_parameters(&audio_encoder);
-        drop(audio_encoder_guard);
+        drop(audio_encoder_guard);*/
 
 
 
         octx.write_header()?;
 
         let output_tb_0 = octx.stream(0).unwrap().time_base();
-        let output_tb_1 = octx.stream(1).unwrap().time_base();
+        //let output_tb_1 = octx.stream(1).unwrap().time_base();
 
         for mut pkt in video_packets {
             pkt.set_stream(0);
@@ -115,11 +115,11 @@ impl Saver {
             pkt.write_interleaved(&mut octx)?;
         }
 
-        for mut pkt in audio_packets {
+        /*for mut pkt in audio_packets {
             pkt.set_stream(1);
             pkt.rescale_ts(audio_input_tb, output_tb_1);
             pkt.write_interleaved(&mut octx)?;
-        }
+        }*/
 
         octx.write_trailer()?;
 

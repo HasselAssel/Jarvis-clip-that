@@ -25,7 +25,7 @@ impl AudioCapturer {
         enc.set_channel_layout(ffmpeg_next::util::channel_layout::ChannelLayout::STEREO);
         enc.set_format(ffmpeg_next::format::Sample::F32(ffmpeg_next::util::format::sample::Type::Planar));
         enc.set_bit_rate(128_000);
-        //enc.set_time_base((1, 44_100));
+        enc.set_time_base((1, 44_100));
 
         let _a = enc.open_as(codec).unwrap();
         let audio_encoder = Arc::new(Mutex::new(_a));
@@ -75,6 +75,8 @@ impl AudioCapturer {
             let mut left_buffer = VecDeque::new();
             let mut right_buffer = VecDeque::new();
 
+            let mut zähler = 0;
+
 
             loop {
                 start_time = Instant::now();
@@ -85,6 +87,7 @@ impl AudioCapturer {
                     if expected_elapsed > elapsed {
                         sleep(expected_elapsed - elapsed);
                     }
+                    zähler += 1;
 
                     event_handle.wait_for_event(u32::MAX).unwrap();
 
@@ -136,6 +139,7 @@ impl AudioCapturer {
                             right_plane.copy_from_slice(&r);
 
                             audio_frame.set_pts(Some(frame_counter));
+                            //audio_frame.set_pts(Some((zähler * 44_100 / self.fps) as i64));
                             frame_counter += next_packets_frames as i64;
 
                             let mut audio_encoder = self.audio_encoder.lock().unwrap();
