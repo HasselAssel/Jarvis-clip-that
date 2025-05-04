@@ -61,9 +61,9 @@ impl RingBuffer {
             }
         }
 
-        let mut packet_wrappers_wrapper = {
+        let packet_wrappers_wrapper = {
             let reuse = self.buffer.back()
-                .map(|back| packet.flags().bits() != ffmpeg_next::ffi::AV_PKT_FLAG_KEY)
+                .map(|_back| packet.flags().bits() != ffmpeg_next::ffi::AV_PKT_FLAG_KEY)
                 .unwrap_or(false);
             if reuse {
                 self.buffer.back_mut()
@@ -91,8 +91,7 @@ impl RingBuffer {
         } else {
             let mut packets: Vec<ffmpeg_next::codec::packet::Packet> = self.buffer.iter().flat_map(|b| b.buffer.iter().map(|b| b.buffer.clone())).collect();
             let pts_offset: i64 = packets.iter().map(|a| a.pts().unwrap_or(i64::MAX)).min().unwrap();
-            println!("MIN PTS VALUE {}", pts_offset);
-            let _ = packets.iter_mut().for_each(|mut a| {
+            let _ = packets.iter_mut().for_each(|a| {
                 if let Some(pts) = a.pts() { a.set_pts(Some(pts - pts_offset)); }
                 if let Some(dts) = a.dts() { a.set_dts(Some(dts - pts_offset)); }
             });

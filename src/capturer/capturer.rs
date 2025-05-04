@@ -13,9 +13,6 @@ use windows::Win32::Graphics::Dxgi::Common::{DXGI_FORMAT_B8G8R8A8_UNORM, DXGI_SA
 
 use crate::capturer::ring_buffer::{RingBuffer, PacketWrapper};
 
-struct VieleWerte {
-}
-
 pub struct Capturer {
     fps: i32,
     out_width: u32,
@@ -31,10 +28,31 @@ pub struct Capturer {
 }
 
 impl Capturer {
-    pub fn new(fps: i32, out_width: u32, out_height: u32, video_encoder: Arc<Mutex<ffmpeg_next::codec::encoder::Video>>, ring_buffer: Arc<Mutex<RingBuffer>>) -> Self {
+    pub fn new(fps: i32, out_width: u32, out_height: u32, ring_buffer: Arc<Mutex<RingBuffer>>) -> (Self, Arc<Mutex<ffmpeg_next::codec::encoder::Video>>) {
+        let codec = ffmpeg_next::codec::encoder::find(ffmpeg_next::codec::id::Id::H265).or_else(|| {
+            println!("H264 not found :(");
+            ffmpeg_next::codec::encoder::find_by_name("libx264")
+        }).ok_or(ffmpeg_next::Error::EncoderNotFound).unwrap();
+        let ctx = ffmpeg_next::codec::context::Context::new_with_codec(codec);
+        let mut enc = ctx.encoder().video().unwrap();
+
+        enc.set_width(out_width);
+        enc.set_height(out_height);
+        enc.set_format(ffmpeg_next::format::Pixel::YUV420P);
+        enc.set_time_base((1, fps));
+        enc.set_frame_rate(Some((fps, 1)));
+        enc.set_bit_rate(8_000_000);
+
+        enc.set_flags(ffmpeg_next::codec::Flags::GLOBAL_HEADER); // Extradata is generated
+        enc.set_gop(fps as u32); // Keyframe interval (1 second)
+
+        let _v = enc.open_as(codec).unwrap();
+        let video_encoder = Arc::new(Mutex::new(_v));
+        let video_encoder_return = Arc::clone(&video_encoder);
+
         let mut device: Option<ID3D11Device> = None;
         let mut context: Option<ID3D11DeviceContext> = None;
-        // hmmm maybe unsafe, maybe safe who knows
+        // hmmm maybe safe, maybe unsafe, who knows
         unsafe {
             let _ = D3D11CreateDevice(
                 None,
@@ -92,7 +110,7 @@ impl Capturer {
             dest_texture.unwrap()
         };
 
-        Self {
+        (Self {
             fps,
             out_width,
             out_height,
@@ -103,19 +121,11 @@ impl Capturer {
             context,
             single_texture_buffer,
             single_texture_desc,
-        }
+        },
+         video_encoder_return)
     }
 
     pub fn start_capturing(self) -> JoinHandle<Result<()>>{
-        let fps = self.fps;
-        let width = self.out_width;
-        let height = self.out_height;
-
-        let arc_video_encoder = Arc::clone(&self.video_encoder);
-        let arc_ring_buffer: Arc<Mutex<RingBuffer>> = Arc::clone(&self.ring_buffer);
-        let desc_width = self.single_texture_desc.Width;
-        let desc_height = self.single_texture_desc.Height;
-
         thread::spawn(move || -> Result<()> {
             let mut resource: Option<IDXGIResource>;
             let mut hr: Result<()>;
@@ -131,8 +141,8 @@ impl Capturer {
             let mut scaler: ffmpeg_next::software::scaling::context::Context;
             let mut frame_buffer: Vec<u8>;
             let bytes_per_pixel = 4;
-            let scanline_bytes = desc_width * bytes_per_pixel;
-            let mut src_frame = ffmpeg_next::util::frame::video::Video::new(ffmpeg_next::format::Pixel::BGRA, desc_width, desc_height);
+            let scanline_bytes = self.single_texture_desc.Width * bytes_per_pixel;
+            let mut src_frame = ffmpeg_next::util::frame::video::Video::new(ffmpeg_next::format::Pixel::BGRA, self.single_texture_desc.Width, self.single_texture_desc.Height);
             let mut dst_frame = ffmpeg_next::util::frame::video::Video::new(ffmpeg_next::format::Pixel::YUV420P, self.out_width, self.out_height);
 
             let mut piped_frames = 0;
@@ -171,8 +181,8 @@ impl Capturer {
 
                                 scaler = ffmpeg_next::software::scaling::context::Context::get(
                                     ffmpeg_next::format::Pixel::BGRA, // Source pixel format
-                                    desc_width,
-                                    desc_height,
+                                    self.single_texture_desc.Width,
+                                    self.single_texture_desc.Height,
                                     ffmpeg_next::format::Pixel::YUV420P, // Destination pixel format
                                     self.out_width,
                                     self.out_height,
@@ -183,10 +193,10 @@ impl Capturer {
                                 let base = NonNull::new(base_ptr as *mut u8)
                                     .expect("Mapped pData should never be null");
 
-                                frame_buffer = Vec::with_capacity((desc_width * desc_height * 4) as usize);
-                                for row in 0..desc_height {
+                                frame_buffer = Vec::with_capacity((self.single_texture_desc.Width * self.single_texture_desc.Height * 4) as usize);
+                                for row in 0..self.single_texture_desc.Height {
                                     let offset = row * mapped.RowPitch;
-                                    // SAFETY: we know each scanline is contiguous memory of length scanline_bytes
+                                    // SAFETY: each scanline is contiguous memory of length scanline_bytes
                                     let slice = unsafe { std::slice::from_raw_parts(base.as_ptr().add(offset as usize), scanline_bytes as usize) };
                                     frame_buffer.extend_from_slice(slice);
                                 }
@@ -203,17 +213,18 @@ impl Capturer {
                         unsafe { self.duplication.ReleaseFrame().unwrap(); }
                     }
 
-                    dst_frame.set_pts(Some(frame_counter as i64));
+                    dst_frame.set_pts(Some(frame_counter));
                     frame_counter += 1;
 
-                    let mut video_encoder = arc_video_encoder.lock().unwrap();
+                    let mut video_encoder = self.video_encoder.lock().unwrap();
                     video_encoder.send_frame(&dst_frame).unwrap();
                     piped_frames += 1;
 
                     let mut packet: ffmpeg_next::codec::packet::Packet = ffmpeg_next::codec::packet::Packet::empty();
                     while let Ok(_) = video_encoder.receive_packet(&mut packet) {
-                        let mut ring_buffer = arc_ring_buffer.lock().unwrap();
+                        let mut ring_buffer = self.ring_buffer.lock().unwrap();
                         ring_buffer.insert(PacketWrapper::new(piped_frames, packet.clone()));
+                        drop(ring_buffer);
                         piped_frames = 0;
                         packet = ffmpeg_next::codec::packet::Packet::empty();
                     }
