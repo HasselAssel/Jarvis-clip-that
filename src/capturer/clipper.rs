@@ -12,11 +12,11 @@ use crate::capturer::saver::Saver;
 pub struct Clipper {
     video_ring_buffer: Arc<Mutex<RingBuffer>>,
     video_encoder: Arc<Mutex<ffmpeg_next::codec::encoder::Video>>,
-    audio_ring_buffer: Arc<Mutex<RingBuffer>>,
+    /*audio_ring_buffer: Arc<Mutex<RingBuffer>>,
     audio_encoder: Arc<Mutex<ffmpeg_next::codec::encoder::Audio>>,
 
 
-    audio_capturer: AudioCapturer,
+    audio_capturer: AudioCapturer,*/
     capturer: Capturer,
     key_listener: KeyListener,
 }
@@ -28,19 +28,19 @@ impl Clipper {
 
 
         let (capturer, video_encoder) = Capturer::new(fps, width, height, Arc::clone(&video_ring_buffer));
-        let (audio_capturer, audio_encoder) = AudioCapturer::new(fps,Arc::clone(&audio_ring_buffer));
-        let saver = Saver::new(Arc::clone(&video_encoder), Arc::clone(&video_ring_buffer), Arc::clone(&audio_encoder), Arc::clone(&audio_ring_buffer), "out", "Chat Clip That", ".mp4");
+        //let (audio_capturer, audio_encoder) = AudioCapturer::new(fps,Arc::clone(&audio_ring_buffer));
+        let saver = Saver::new(Arc::clone(&video_encoder), Arc::clone(&video_ring_buffer), /*Arc::clone(&audio_encoder), Arc::clone(&audio_ring_buffer),*/ "out", "Chat Clip That", ".mp4");
         let key_listener = KeyListener::new(saver);
 
         Self {
             video_ring_buffer,
             video_encoder,
 
-            audio_ring_buffer,
+            /*audio_ring_buffer,
             audio_encoder,
 
 
-            audio_capturer,
+            audio_capturer,*/
             capturer,
             key_listener,
         }

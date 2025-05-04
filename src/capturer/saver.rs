@@ -8,8 +8,8 @@ use crate::capturer::ring_buffer::RingBuffer;
 pub struct Saver {
     video_encoder: Arc<Mutex<ffmpeg_next::codec::encoder::Video>>,
     video_ring_buffer: Arc<Mutex<RingBuffer>>,
-    audio_encoder: Arc<Mutex<ffmpeg_next::codec::encoder::Audio>>,
-    audio_ring_buffer: Arc<Mutex<RingBuffer>>,
+    /*audio_encoder: Arc<Mutex<ffmpeg_next::codec::encoder::Audio>>,
+    audio_ring_buffer: Arc<Mutex<RingBuffer>>,*/
 
     out_dir_path: String,
     base_file_name: String,
@@ -20,7 +20,7 @@ pub struct Saver {
 }
 
 impl Saver {
-    pub fn new<S: Into<String>>(video_encoder: Arc<Mutex<ffmpeg_next::codec::encoder::Video>>, video_ring_buffer: Arc<Mutex<RingBuffer>>, audio_encoder: Arc<Mutex<ffmpeg_next::codec::encoder::Audio>>, audio_ring_buffer: Arc<Mutex<RingBuffer>>, out_dir_path: S, base_file_name: S, extension: S) -> Self {
+    pub fn new<S: Into<String>>(video_encoder: Arc<Mutex<ffmpeg_next::codec::encoder::Video>>, video_ring_buffer: Arc<Mutex<RingBuffer>>, /*audio_encoder: Arc<Mutex<ffmpeg_next::codec::encoder::Audio>>, audio_ring_buffer: Arc<Mutex<RingBuffer>>,*/ out_dir_path: S, base_file_name: S, extension: S) -> Self {
         let out_dir_path = out_dir_path.into();
         let base_file_name = base_file_name.into();
         let extension = extension.into();
@@ -36,8 +36,8 @@ impl Saver {
         Self {
             video_encoder,
             video_ring_buffer,
-            audio_encoder,
-            audio_ring_buffer,
+            /*audio_encoder,
+            audio_ring_buffer,*/
 
             out_dir_path,
             base_file_name,

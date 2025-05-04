@@ -149,14 +149,18 @@ impl Capturer {
 
             let mut frame_counter = 0;
 
+            let mut t_encode = Instant::now();
+
             loop {
                 start_time = Instant::now();
 
                 for i in 0..u32::MAX {
+                    let mut t_acquire = Instant::now();
                     elapsed = start_time.elapsed();
 
                     expected_elapsed = frame_duration.saturating_mul(i);
                     if expected_elapsed > elapsed {
+                        println!("SLEEPY TIME");
                         sleep(expected_elapsed - elapsed);
                     }
                     resource = None;
@@ -175,6 +179,9 @@ impl Capturer {
                                     hr = self.context.Map(&self.single_texture_buffer, 0, D3D11_MAP_READ, 0, Some(&mut mapped));
                                 }
 
+                                eprintln!("GPU copy: {:?}", t_acquire.elapsed());
+                                let mut t_copy = Instant::now();
+
                                 if hr.is_err() {
                                     panic!("HEY MAPPING DIDNT WORK");
                                 }
@@ -186,7 +193,7 @@ impl Capturer {
                                     ffmpeg_next::format::Pixel::YUV420P, // Destination pixel format
                                     self.out_width,
                                     self.out_height,
-                                    ffmpeg_next::software::scaling::Flags::FAST_BILINEAR,
+                                    ffmpeg_next::software::scaling::Flags::BILINEAR,
                                 ).unwrap();
 
                                 let base_ptr = mapped.pData as *const u8;
@@ -203,7 +210,14 @@ impl Capturer {
                                 let src_data = src_frame.data_mut(0);
                                 src_data.copy_from_slice(&frame_buffer);
 
+                                eprintln!("CPU copy: {:?}", t_copy.elapsed());
+                                let mut t_scale = Instant::now();
+
                                 scaler.run(&src_frame, &mut dst_frame).unwrap();
+
+                                eprintln!("Scaling: {:?}", t_scale.elapsed());
+
+                                t_encode = Instant::now();
                             }
                         } else {
                             panic!("somehow None :(");
@@ -211,7 +225,10 @@ impl Capturer {
 
                         // how can releasing a frame not be safe, right?
                         unsafe { self.duplication.ReleaseFrame().unwrap(); }
+                    } else {
+                        println!("ERROR!");
                     }
+                    println!("{}, {}", frame_counter, elapsed.as_millis());
 
                     dst_frame.set_pts(Some(frame_counter));
                     frame_counter += 1;
@@ -221,14 +238,17 @@ impl Capturer {
                     piped_frames += 1;
 
                     let mut packet: ffmpeg_next::codec::packet::Packet = ffmpeg_next::codec::packet::Packet::empty();
+                    let mut ring_buffer = self.ring_buffer.lock().unwrap();
                     while let Ok(_) = video_encoder.receive_packet(&mut packet) {
-                        let mut ring_buffer = self.ring_buffer.lock().unwrap();
                         ring_buffer.insert(PacketWrapper::new(piped_frames, packet.clone()));
-                        drop(ring_buffer);
                         piped_frames = 0;
                         packet = ffmpeg_next::codec::packet::Packet::empty();
+                        println!("RECEIVER");
                     }
+                    drop(ring_buffer);
                     drop(video_encoder);
+
+                    eprintln!("Encode+I/O: {:?}", t_encode.elapsed());
                 }
             }
         })
