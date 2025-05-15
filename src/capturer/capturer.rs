@@ -1,10 +1,11 @@
-use std::ptr::{NonNull, null_mut};
+use std::ptr::{NonNull, null, null_mut};
 use std::sync::{Arc, Mutex};
 use std::{ptr, thread};
 use std::mem::ManuallyDrop;
 use std::thread::{JoinHandle, sleep};
 use std::time::{Duration, Instant};
 use ffmpeg_next::{Frame, Packet};
+use ffmpeg_next::ffi::av_frame_copy_props;
 use ffmpeg_next::frame::Video;
 use ffmpeg_next::sys::{av_buffer_create, av_buffer_ref, av_buffer_unref, av_frame_alloc, av_hwdevice_ctx_alloc, av_hwdevice_ctx_init, av_hwframe_ctx_alloc, av_hwframe_ctx_init, av_hwframe_get_buffer, AVBufferRef, AVFrame, AVHWDeviceType};
 use ffmpeg_next::sys::AVPixelFormat::{AV_PIX_FMT_D3D11, AV_PIX_FMT_NV12};
@@ -37,248 +38,20 @@ pub struct Capturer {
     fps: i32,
     out_width: u32,
     out_height: u32,
+    in_width: u32,
+    in_height: u32,
 
     ring_buffer: Arc<Mutex<RingBuffer>>,
     video_encoder: Arc<Mutex<ffmpeg_next::codec::encoder::Video>>,
 
     duplication: IDXGIOutputDuplication,
     context: ID3D11DeviceContext,
-    single_texture_buffer: ID3D11Texture2D,
-    single_texture_desc: D3D11_TEXTURE2D_DESC,
 
     device: ID3D11Device,
     hw_frame_ctx: usize,
 }
 
 impl Capturer {
-    pub fn _new(fps: i32, out_width: u32, out_height: u32, ring_buffer: Arc<Mutex<RingBuffer>>) -> (Self, Arc<Mutex<ffmpeg_next::codec::encoder::Video>>) {
-        let codec = ffmpeg_next::codec::encoder::find(ffmpeg_next::codec::id::Id::H265).or_else(|| {
-            println!("H264 not found :(");
-            ffmpeg_next::codec::encoder::find_by_name("libx264")
-        }).ok_or(ffmpeg_next::Error::EncoderNotFound).unwrap();
-        let ctx = ffmpeg_next::codec::context::Context::new_with_codec(codec);
-        let mut enc = ctx.encoder().video().unwrap();
-
-        enc.set_width(out_width);
-        enc.set_height(out_height);
-        enc.set_format(ffmpeg_next::format::Pixel::YUV420P);
-        enc.set_time_base((1, fps));
-        enc.set_frame_rate(Some((fps, 1)));
-        enc.set_bit_rate(8_000_000);
-
-        enc.set_flags(ffmpeg_next::codec::Flags::GLOBAL_HEADER); // Extradata is generated
-        enc.set_gop(fps as u32); // Keyframe interval (1 second)
-
-        let _v = enc.open_as(codec).unwrap();
-        let video_encoder = Arc::new(Mutex::new(_v));
-        let video_encoder_return = Arc::clone(&video_encoder);
-
-        let mut device: Option<ID3D11Device> = None;
-        let mut context: Option<ID3D11DeviceContext> = None;
-        // hmmm maybe safe, maybe unsafe, who knows
-        unsafe {
-            let _ = D3D11CreateDevice(
-                None,
-                D3D_DRIVER_TYPE_HARDWARE,
-                HMODULE::default(),
-                D3D11_CREATE_DEVICE_BGRA_SUPPORT,
-                Some(&[D3D_FEATURE_LEVEL_11_0, D3D_FEATURE_LEVEL_10_0]),
-                D3D11_SDK_VERSION,
-                Some(&mut device),
-                None,
-                Some(&mut context),
-            );
-        }
-        let device: ID3D11Device = device.unwrap();
-        let context: ID3D11DeviceContext = context.unwrap();
-        let dxgi_device: IDXGIDevice = device.cast().unwrap();
-
-        let adapter: IDXGIAdapter;
-        let output: IDXGIOutput;
-        let output1: IDXGIOutput1;
-        let duplication: IDXGIOutputDuplication;
-        let out_desc: DXGI_OUTDUPL_DESC;
-        // yea IDK why this is safe, works on my machine
-        unsafe {
-            adapter = dxgi_device.GetAdapter().unwrap();
-            // Enumerate the first output (primary monitor).
-            output = adapter.EnumOutputs(0).unwrap();
-        }
-        output1 = output.cast().unwrap();
-        // same here, dont know, dont care
-        unsafe {
-            duplication = output1.DuplicateOutput(&device).unwrap();
-            out_desc = duplication.GetDesc();
-        }
-        let _width: u32 = out_desc.ModeDesc.Width;
-        let _height: u32 = out_desc.ModeDesc.Height;
-
-        let single_texture_desc = D3D11_TEXTURE2D_DESC {
-            Width: _width,
-            Height: _height,
-            MipLevels: 1,
-            ArraySize: 1,
-            Format: DXGI_FORMAT_B8G8R8A8_UNORM,
-            SampleDesc: DXGI_SAMPLE_DESC { Count: 1, Quality: 0 },
-            Usage: D3D11_USAGE_STAGING,
-            BindFlags: 0,
-            CPUAccessFlags: D3D11_CPU_ACCESS_READ.0 as u32,
-            MiscFlags: 0,
-        };
-
-        let single_texture_buffer: ID3D11Texture2D = {
-            let mut dest_texture = None;
-            // hmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmm...
-            unsafe { device.CreateTexture2D(&single_texture_desc, None, Some(&mut dest_texture)).unwrap(); }
-            dest_texture.unwrap()
-        };
-
-        (Self {
-            fps,
-            out_width,
-            out_height,
-
-            ring_buffer,
-            video_encoder,
-
-            duplication,
-            context,
-            single_texture_buffer,
-            single_texture_desc,
-
-            device,
-            hw_frame_ctx: unsafe { 0 as _ },
-        },
-         video_encoder_return)
-    }
-
-    pub fn _start_capturing(self) -> JoinHandle<Result<()>> {
-        thread::spawn(move || -> Result<()> {
-            let mut resource: Option<IDXGIResource>;
-            let mut hr: Result<()>;
-            let mut frame_info: DXGI_OUTDUPL_FRAME_INFO = DXGI_OUTDUPL_FRAME_INFO::default();
-            let mut tex: ID3D11Texture2D;
-            let mut mapped: D3D11_MAPPED_SUBRESOURCE;
-
-            let frame_duration: Duration = Duration::from_secs_f64(1.0f64 / (self.fps as f64));
-            let mut elapsed: Duration;
-            let mut expected_elapsed: Duration;
-            let mut start_time: Instant;
-
-            let mut scaler: ffmpeg_next::software::scaling::context::Context = ffmpeg_next::software::scaling::context::Context::get(
-                ffmpeg_next::format::Pixel::BGRA, // Source pixel format
-                self.single_texture_desc.Width,
-                self.single_texture_desc.Height,
-                ffmpeg_next::format::Pixel::YUV420P, // Destination pixel format
-                self.out_width,
-                self.out_height,
-                ffmpeg_next::software::scaling::Flags::BILINEAR,
-            ).unwrap();
-            let mut frame_buffer: Vec<u8> = Vec::with_capacity((self.single_texture_desc.Width * self.single_texture_desc.Height * 4) as usize);
-            let bytes_per_pixel = 4;
-            let scanline_bytes = self.single_texture_desc.Width * bytes_per_pixel;
-            let mut src_frame = ffmpeg_next::util::frame::video::Video::new(ffmpeg_next::format::Pixel::BGRA, self.single_texture_desc.Width, self.single_texture_desc.Height);
-            let mut dst_frame = ffmpeg_next::util::frame::video::Video::new(ffmpeg_next::format::Pixel::YUV420P, self.out_width, self.out_height);
-
-            let mut piped_frames = 0;
-
-            let mut frame_counter = 0;
-
-            let mut t_encode = Instant::now();
-
-            loop {
-                start_time = Instant::now();
-
-                for i in 0..u32::MAX {
-                    let mut t_acquire = Instant::now();
-                    elapsed = start_time.elapsed();
-
-                    expected_elapsed = frame_duration.saturating_mul(i);
-                    if expected_elapsed > elapsed {
-                        println!("SLEEPY TIME");
-                        sleep(expected_elapsed - elapsed);
-                    }
-                    resource = None;
-                    // surely this is safe!
-                    unsafe { hr = self.duplication.AcquireNextFrame(0, &mut frame_info, &mut resource); }
-                    if !hr.is_err() {
-                        if let Some(dxgi_resource) = resource {
-                            if frame_info.AccumulatedFrames != 0 {
-                                tex = dxgi_resource.cast().unwrap();
-
-                                mapped = D3D11_MAPPED_SUBRESOURCE::default();
-                                //let hr: Result<()>;
-                                // IT'S SAFE, IT'S SAFE, IT'S SAFE
-                                unsafe {
-                                    self.context.CopyResource(&self.single_texture_buffer, &tex);
-                                    hr = self.context.Map(&self.single_texture_buffer, 0, D3D11_MAP_READ, 0, Some(&mut mapped));
-                                }
-
-                                eprintln!("GPU copy: {:?}", t_acquire.elapsed());
-                                let mut t_copy = Instant::now();
-
-                                if hr.is_err() {
-                                    panic!("HEY MAPPING DIDNT WORK");
-                                }
-
-                                let base_ptr = mapped.pData as *const u8;
-                                let base = NonNull::new(base_ptr as *mut u8)
-                                    .expect("Mapped pData should never be null");
-
-                                frame_buffer.clear();
-                                for row in 0..self.single_texture_desc.Height {
-                                    let offset = row * mapped.RowPitch;
-                                    // SAFETY: each scanline is contiguous memory of length scanline_bytes
-                                    let slice = unsafe { std::slice::from_raw_parts(base.as_ptr().add(offset as usize), scanline_bytes as usize) };
-                                    frame_buffer.extend_from_slice(slice);
-                                }
-                                let src_data = src_frame.data_mut(0);
-                                src_data.copy_from_slice(&frame_buffer);
-
-                                eprintln!("CPU copy: {:?}", t_copy.elapsed());
-                                let mut t_scale = Instant::now();
-
-                                scaler.run(&src_frame, &mut dst_frame).unwrap();
-
-                                eprintln!("Scaling: {:?}", t_scale.elapsed());
-
-                                t_encode = Instant::now();
-                            }
-                        } else {
-                            panic!("somehow None :(");
-                        }
-
-                        // how can releasing a frame not be safe, right?
-                        unsafe { self.duplication.ReleaseFrame().unwrap(); }
-                    } else {
-                        println!("ERROR!");
-                    }
-                    println!("{}, {}", frame_counter, elapsed.as_millis());
-
-                    dst_frame.set_pts(Some(frame_counter));
-                    frame_counter += 1;
-
-                    let mut video_encoder = self.video_encoder.lock().unwrap();
-                    video_encoder.send_frame(&dst_frame).unwrap();
-                    piped_frames += 1;
-
-                    let mut packet: ffmpeg_next::codec::packet::Packet = ffmpeg_next::codec::packet::Packet::empty();
-                    let mut ring_buffer = self.ring_buffer.lock().unwrap();
-                    while let Ok(_) = video_encoder.receive_packet(&mut packet) {
-                        ring_buffer.insert(PacketWrapper::new(piped_frames, packet.clone()));
-                        piped_frames = 0;
-                        //packet = ffmpeg_next::codec::packet::Packet::empty();
-                        println!("RECEIVER");
-                    }
-                    drop(ring_buffer);
-                    drop(video_encoder);
-
-                    eprintln!("Encode+I/O: {:?}", t_encode.elapsed());
-                }
-            }
-        })
-    }
-
     pub fn new(fps: i32, out_width: u32, out_height: u32, ring_buffer: Arc<Mutex<RingBuffer>>) -> (Self, Arc<Mutex<ffmpeg_next::codec::encoder::Video>>) {
         let mut device: Option<ID3D11Device> = None;
         let mut context: Option<ID3D11DeviceContext> = None;
@@ -302,9 +75,6 @@ impl Capturer {
         #[repr(C)]
         pub struct AVD3D11VADeviceContext {
             pub device: *mut ID3D11Device,
-            pub device_context: *mut ID3D11DeviceContext,
-            pub video_device: *mut ID3D11VideoDevice,
-            pub video_context: *mut ID3D11VideoContext,
         }
 
         let codec = ffmpeg_next::codec::encoder::find_by_name("hevc_amf")
@@ -396,42 +166,21 @@ impl Capturer {
             duplication = output1.DuplicateOutput(&device).unwrap();
             out_desc = duplication.GetDesc();
         }
-        let _width: u32 = out_desc.ModeDesc.Width;
-        let _height: u32 = out_desc.ModeDesc.Height;
-
-        let single_texture_desc = D3D11_TEXTURE2D_DESC {
-            Width: _width,
-            Height: _height,
-            MipLevels: 1,
-            ArraySize: 1,
-            //Format: DXGI_FORMAT_NV12,
-            Format: DXGI_FORMAT_B8G8R8A8_UNORM,
-            SampleDesc: DXGI_SAMPLE_DESC { Count: 1, Quality: 0 },
-            Usage: D3D11_USAGE_DEFAULT,
-            BindFlags: (D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_RENDER_TARGET).0 as u32,
-            CPUAccessFlags: 0,
-            MiscFlags: 0,
-        };
-
-        let single_texture_buffer: ID3D11Texture2D = {
-            let mut dest_texture = None;
-            // hmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmm...
-            unsafe { device.CreateTexture2D(&single_texture_desc, None, Some(&mut dest_texture)).unwrap(); }
-            dest_texture.unwrap()
-        };
+        let in_width: u32 = out_desc.ModeDesc.Width;
+        let in_height: u32 = out_desc.ModeDesc.Height;
 
         (Self {
             fps,
             out_width,
             out_height,
+            in_width,
+            in_height,
 
             ring_buffer,
             video_encoder,
 
             duplication,
             context,
-            single_texture_buffer,
-            single_texture_desc,
 
             device,
             hw_frame_ctx: hw_frame_ctx as usize,
@@ -439,16 +188,15 @@ impl Capturer {
          video_encoder_return)
     }
 
-    pub fn start_capturing(self) -> JoinHandle<Result<()>> {
-        thread::spawn(move || -> Result<()> {
+    pub fn start_capturing(self) -> JoinHandle<std::result::Result<(), String>> {
+        thread::spawn(move || -> std::result::Result<(), String> {
             let mut resource: Option<IDXGIResource>;
             let mut hr: Result<()>;
             let mut frame_info: DXGI_OUTDUPL_FRAME_INFO = DXGI_OUTDUPL_FRAME_INFO::default();
             let mut tex: ID3D11Texture2D;
             let mut nv12_tex: ID3D11Texture2D;
-
             let mut av_frame: *mut AVFrame = null_mut();
-            let mut frame: Video;
+            let mut frame: Video = Video::new(ffmpeg_next::format::Pixel::NV12, self.out_width, self.out_height);
             let mut packet: Packet = Packet::empty();
 
             let frame_duration: Duration = Duration::from_secs_f64(1.0f64 / (self.fps as f64));
@@ -456,8 +204,8 @@ impl Capturer {
             let mut expected_elapsed: Duration;
             let mut start_time: Instant;
 
-            let mut piped_frames = 0;
-            let mut frame_counter = 0;
+            let mut packet_sent_frames_counter = 0;
+            let mut total_frames_counter = 0;
 
             loop {
                 start_time = Instant::now();
@@ -504,7 +252,6 @@ impl Capturer {
                                         0,
                                     )
                                 };
-
                                 unsafe {
                                     av_frame = av_frame_alloc();
                                     (*av_frame).format = AV_PIX_FMT_D3D11 as i32;
@@ -516,9 +263,8 @@ impl Capturer {
                                     av_hwframe_get_buffer(self.hw_frame_ctx as *mut AVBufferRef, av_frame, 0)
                                 };
                                 if ret < 0 || av_frame.is_null() {
-                                    break 'rr Err(format!("av_hwframe_get_buffer failed: {}", ret))
+                                    break 'rr Err(format!("av_hwframe_get_buffer failed: {}", ret));
                                 }
-
                                 unsafe {
                                     (*av_frame).format = AV_PIX_FMT_D3D11 as i32;
                                     (*av_frame).width = self.out_width as _;
@@ -536,25 +282,28 @@ impl Capturer {
                         _exists_new_frame
                     };
 
-                    // Todo: Fix that when capturing right when the screen is frozen, the frozen time is not saved cause no frame with pts at capture time exists
+                    // TODO: Fix First Frame always being Green (for some reason the first duplication.AcquireNextFrame call generates no IDXGIResource)
+
 
                     if let Ok(_) = exists_new_frame {
                         frame = unsafe { Video::wrap(av_frame) };
-                        frame.set_pts(Some(frame_counter));
-
-                        let mut video_encoder = self.video_encoder.lock().unwrap();
-                        video_encoder.send_frame(&frame).unwrap();
-
-                        let mut ring_buffer = self.ring_buffer.lock().unwrap();
-                        while let Ok(_) = video_encoder.receive_packet(&mut packet) {
-                            ring_buffer.insert(PacketWrapper::new(piped_frames, packet.clone()));
-                            piped_frames = 0;
-                        }
-                        drop(ring_buffer);
-                        drop(video_encoder);
                     }
-                    frame_counter += 1;
-                    piped_frames += 1;
+                    total_frames_counter += 1;
+                    packet_sent_frames_counter += 1;
+
+                    frame.set_pts(Some(total_frames_counter));
+
+                    let mut video_encoder = self.video_encoder.lock().unwrap();
+                    video_encoder.send_frame(&frame).unwrap();
+
+                    let mut ring_buffer = self.ring_buffer.lock().unwrap();
+                    while let Ok(_) = video_encoder.receive_packet(&mut packet) {
+                        ring_buffer.insert(PacketWrapper::new(packet_sent_frames_counter, packet.clone()));
+                        packet_sent_frames_counter = 0;
+                    }
+                    drop(ring_buffer);
+                    drop(video_encoder);
+
                 }
             }
         })
@@ -585,7 +334,6 @@ impl Capturer {
 
         //verify
         let _2 = vp_enum.CheckVideoProcessorFormat(DXGI_FORMAT_B8G8R8A8_UNORM).unwrap();
-        println!("RESULT WAS: {}", _2);
 
         // 3) Create the VideoProcessor itself
         let mut vp: ID3D11VideoProcessor = video_dev.CreateVideoProcessor(&vp_enum, 0).unwrap();             // :contentReference[oaicite:6]{index=6}
@@ -658,7 +406,5 @@ impl Capturer {
         Ok(tex_nv12)
     }
 
-    unsafe extern "C" fn buffer_free(_opaque: *mut std::ffi::c_void, data: *mut u8) {
-
-    }
+    unsafe extern "C" fn buffer_free(_opaque: *mut std::ffi::c_void, data: *mut u8) {}
 }
