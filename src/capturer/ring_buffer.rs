@@ -77,7 +77,7 @@ impl RingBuffer {
     }
 
     pub fn get_slice(&self, min_requested_frames: Option<i32>) -> Vec<ffmpeg_next::codec::packet::Packet> {
-        if let Some(min_requested_frames) = min_requested_frames {
+        let mut returned_vec = if let Some(min_requested_frames) = min_requested_frames {
             let mut i: usize = 0;
             let mut frames = 0;
             let mut vec = Vec::new();
@@ -89,14 +89,16 @@ impl RingBuffer {
             }
             vec
         } else {
-            let mut packets: Vec<ffmpeg_next::codec::packet::Packet> = self.buffer.iter().flat_map(|b| b.buffer.iter().map(|b| b.buffer.clone())).collect();
-            let pts_offset: i64 = packets.iter().map(|a| a.pts().unwrap_or(i64::MAX)).min().unwrap();
-            let _ = packets.iter_mut().for_each(|a| {
-                if let Some(pts) = a.pts() { a.set_pts(Some(pts - pts_offset)); }
-                if let Some(dts) = a.dts() { a.set_dts(Some(dts - pts_offset)); }
-            });
+            let packets: Vec<ffmpeg_next::codec::packet::Packet> = self.buffer.iter().flat_map(|b| b.buffer.iter().map(|b| b.buffer.clone())).collect();
             packets
-        }
+        };
+        let pts_offset: i64 = returned_vec.iter().map(|a| a.pts().unwrap_or(i64::MAX)).min().unwrap_or(0);
+        returned_vec.iter_mut().for_each(|a| {
+            if let Some(pts) = a.pts() { a.set_pts(Some(pts - pts_offset)); }
+            if let Some(dts) = a.dts() { a.set_dts(Some(dts - pts_offset)); }
+        });
+
+        returned_vec
     }
 }
 

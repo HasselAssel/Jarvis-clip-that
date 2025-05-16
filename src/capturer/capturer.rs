@@ -1,38 +1,22 @@
-use std::ptr::{NonNull, null, null_mut};
-use std::sync::{Arc, Mutex};
 use std::{ptr, thread};
 use std::mem::ManuallyDrop;
+use std::ptr::null_mut;
+use std::sync::{Arc, Mutex};
 use std::thread::{JoinHandle, sleep};
 use std::time::{Duration, Instant};
-use ffmpeg_next::{Frame, Packet};
-use ffmpeg_next::ffi::av_frame_copy_props;
-use ffmpeg_next::frame::Video;
-use ffmpeg_next::sys::{av_buffer_create, av_buffer_ref, av_buffer_unref, av_frame_alloc, av_hwdevice_ctx_alloc, av_hwdevice_ctx_init, av_hwframe_ctx_alloc, av_hwframe_ctx_init, av_hwframe_get_buffer, AVBufferRef, AVFrame, AVHWDeviceType};
-use ffmpeg_next::sys::AVPixelFormat::{AV_PIX_FMT_D3D11, AV_PIX_FMT_NV12};
 
-use windows::core::{Result, Interface, s};
+use ffmpeg_next::frame::Video;
+use ffmpeg_next::Packet;
+use ffmpeg_next::sys::{av_buffer_create, av_buffer_ref, av_buffer_unref, av_frame_alloc, av_hwdevice_ctx_alloc, av_hwdevice_ctx_init, av_hwframe_ctx_init, av_hwframe_get_buffer, AVBufferRef, AVFrame, AVHWDeviceType};
+use ffmpeg_next::sys::AVPixelFormat::AV_PIX_FMT_D3D11;
+use windows::core::{Interface, Result};
 use windows::Win32::Foundation::{HMODULE, TRUE};
 use windows::Win32::Graphics::Direct3D::{D3D_DRIVER_TYPE_HARDWARE, D3D_FEATURE_LEVEL_10_0, D3D_FEATURE_LEVEL_11_0};
-use windows::Win32::Graphics::Direct3D11::{D3D11_BIND_RENDER_TARGET, D3D11_BIND_SHADER_RESOURCE, D3D11_BIND_VIDEO_ENCODER, D3D11_CPU_ACCESS_READ, D3D11_CREATE_DEVICE_BGRA_SUPPORT, D3D11_MAP_READ, D3D11_MAPPED_SUBRESOURCE, D3D11_SDK_VERSION, D3D11_TEX2D_VPIV, D3D11_TEX2D_VPOV, D3D11_TEXTURE2D_DESC, D3D11_USAGE_DEFAULT, D3D11_USAGE_STAGING, D3D11_VIDEO_FRAME_FORMAT_PROGRESSIVE, D3D11_VIDEO_PROCESSOR_CONTENT_DESC, D3D11_VIDEO_PROCESSOR_INPUT_VIEW_DESC, D3D11_VIDEO_PROCESSOR_INPUT_VIEW_DESC_0, D3D11_VIDEO_PROCESSOR_OUTPUT_VIEW_DESC, D3D11_VIDEO_PROCESSOR_OUTPUT_VIEW_DESC_0, D3D11_VIDEO_PROCESSOR_STREAM, D3D11_VIDEO_USAGE_PLAYBACK_NORMAL, D3D11_VPIV_DIMENSION_TEXTURE2D, D3D11_VPOV_DIMENSION_TEXTURE2D, D3D11CreateDevice, ID3D11Device, ID3D11DeviceContext, ID3D11Resource, ID3D11Texture2D, ID3D11VideoContext, ID3D11VideoDevice, ID3D11VideoProcessor, ID3D11VideoProcessorEnumerator, ID3D11VideoProcessorInputView, ID3D11VideoProcessorOutputView};
+use windows::Win32::Graphics::Direct3D11::{D3D11_BIND_RENDER_TARGET, D3D11_BIND_SHADER_RESOURCE, D3D11_CREATE_DEVICE_BGRA_SUPPORT, D3D11_SDK_VERSION, D3D11_TEX2D_VPIV, D3D11_TEX2D_VPOV, D3D11_TEXTURE2D_DESC, D3D11_USAGE_DEFAULT, D3D11_VIDEO_FRAME_FORMAT_PROGRESSIVE, D3D11_VIDEO_PROCESSOR_CONTENT_DESC, D3D11_VIDEO_PROCESSOR_INPUT_VIEW_DESC, D3D11_VIDEO_PROCESSOR_INPUT_VIEW_DESC_0, D3D11_VIDEO_PROCESSOR_OUTPUT_VIEW_DESC, D3D11_VIDEO_PROCESSOR_OUTPUT_VIEW_DESC_0, D3D11_VIDEO_PROCESSOR_STREAM, D3D11_VPIV_DIMENSION_TEXTURE2D, D3D11_VPOV_DIMENSION_TEXTURE2D, D3D11CreateDevice, ID3D11Device, ID3D11DeviceContext, ID3D11Texture2D, ID3D11VideoContext, ID3D11VideoDevice, ID3D11VideoProcessor, ID3D11VideoProcessorEnumerator, ID3D11VideoProcessorInputView, ID3D11VideoProcessorOutputView};
 use windows::Win32::Graphics::Dxgi::{DXGI_OUTDUPL_DESC, DXGI_OUTDUPL_FRAME_INFO, IDXGIAdapter, IDXGIDevice, IDXGIOutput, IDXGIOutput1, IDXGIOutputDuplication, IDXGIResource};
-use windows::Win32::Graphics::Dxgi::Common::{DXGI_CPU_ACCESS_NONE, DXGI_FORMAT_B8G8R8A8_UNORM, DXGI_FORMAT_NV12, DXGI_RATIONAL, DXGI_SAMPLE_DESC};
+use windows::Win32::Graphics::Dxgi::Common::{DXGI_FORMAT_B8G8R8A8_UNORM, DXGI_FORMAT_NV12, DXGI_SAMPLE_DESC};
 
-use crate::capturer::ring_buffer::{RingBuffer, PacketWrapper};
-
-#[repr(C)]
-struct AVD3D11FrameDescriptor {
-    texture: *mut ID3D11Texture2D,
-    index: isize,
-}
-
-impl AVD3D11FrameDescriptor {
-    // # Safety
-    // Must point at a valid AVD3D11FrameDescriptor allocated by FFmpeg.
-    unsafe fn from_buf(buf: *mut AVBufferRef) -> *mut ID3D11Texture2D {
-        let desc_ptr = (*buf).data as *mut AVD3D11FrameDescriptor;
-        (*desc_ptr).texture
-    }
-}
+use crate::capturer::ring_buffer::{PacketWrapper, RingBuffer};
 
 pub struct Capturer {
     fps: i32,
@@ -80,7 +64,7 @@ impl Capturer {
         let codec = ffmpeg_next::codec::encoder::find_by_name("hevc_amf")
             .ok_or(ffmpeg_next::Error::EncoderNotFound).unwrap();
 
-        let mut ctx = ffmpeg_next::codec::context::Context::new_with_codec(codec);
+        let ctx = ffmpeg_next::codec::context::Context::new_with_codec(codec);
 
         let mut hw_device_ctx = unsafe { av_hwdevice_ctx_alloc(AVHWDeviceType::AV_HWDEVICE_TYPE_D3D11VA) };
         if hw_device_ctx.is_null() {
@@ -108,7 +92,7 @@ impl Capturer {
         }
 
 
-        let mut hw_frame_ctx: *mut ffmpeg_next::sys::AVBufferRef = unsafe { ffmpeg_next::sys::av_hwframe_ctx_alloc(hw_device_ctx) };
+        let hw_frame_ctx: *mut ffmpeg_next::sys::AVBufferRef = unsafe { ffmpeg_next::sys::av_hwframe_ctx_alloc(hw_device_ctx) };
         if hw_frame_ctx.is_null() { panic!("alloc failed"); }
 
         let frames_ctx = unsafe { &mut *((*hw_frame_ctx).data as *mut ffmpeg_next::sys::AVHWFramesContext) };
@@ -235,11 +219,7 @@ impl Capturer {
                                 tex = dxgi_resource.cast().unwrap();
 
                                 nv12_tex = unsafe {
-                                    self.convert_rgba_to_nv12(
-                                        &tex,
-                                        self.out_width,
-                                        self.out_height,
-                                    ).unwrap()
+                                    self.convert_rgba_to_nv12(&tex).unwrap()
                                 };
 
                                 // TRUST THE PROCESS
@@ -309,11 +289,9 @@ impl Capturer {
         })
     }
 
-    pub unsafe fn convert_rgba_to_nv12(&self,
-                                       tex_rgba: &ID3D11Texture2D,
-                                       width: u32,
-                                       height: u32,
-    ) -> Result<ID3D11Texture2D> {
+    pub unsafe fn convert_rgba_to_nv12(&self, tex_rgba: &ID3D11Texture2D) -> Result<ID3D11Texture2D> {
+        // TODO: Move the weird ass constants to constructor
+
         // 1) QI for ID3D11VideoDevice
         let video_dev: ID3D11VideoDevice = self.device.cast().unwrap();
         let video_ctx: ID3D11VideoContext = self.context.cast().unwrap();
@@ -321,27 +299,29 @@ impl Capturer {
         // 2) Describe & create the VideoProcessorEnumerator
         let vp_desc = D3D11_VIDEO_PROCESSOR_CONTENT_DESC {
             InputFrameFormat: D3D11_VIDEO_FRAME_FORMAT_PROGRESSIVE,
-            InputFrameRate: DXGI_RATIONAL { Numerator: 30, Denominator: 1 },
-            InputWidth: width,
-            InputHeight: height,
-            OutputFrameRate: DXGI_RATIONAL { Numerator: 30, Denominator: 1 },
-            OutputWidth: width,
-            OutputHeight: height,
+            InputFrameRate: Default::default(),
+            InputWidth: self.in_width,
+            InputHeight: self.in_height,
+            OutputFrameRate: Default::default(),
+            OutputWidth: self.out_width,
+            OutputHeight: self.out_height,
             Usage: windows::Win32::Graphics::Direct3D11::D3D11_VIDEO_USAGE_OPTIMAL_SPEED,
         };
         let vp_enum: ID3D11VideoProcessorEnumerator = video_dev.CreateVideoProcessorEnumerator(&vp_desc).unwrap();  // :contentReference[oaicite:5]{index=5}
 
 
         //verify
-        let _2 = vp_enum.CheckVideoProcessorFormat(DXGI_FORMAT_B8G8R8A8_UNORM).unwrap();
+        if vp_enum.CheckVideoProcessorFormat(DXGI_FORMAT_B8G8R8A8_UNORM).is_err() {
+            panic!("DXGI_FORMAT_B8G8R8A8_UNORM not supported by ID3D11VideoProcessorEnumerator")
+        }
 
         // 3) Create the VideoProcessor itself
-        let mut vp: ID3D11VideoProcessor = video_dev.CreateVideoProcessor(&vp_enum, 0).unwrap();             // :contentReference[oaicite:6]{index=6}
+        let vp: ID3D11VideoProcessor = video_dev.CreateVideoProcessor(&vp_enum, 0).unwrap();             // :contentReference[oaicite:6]{index=6}
 
         // 4) Make the NV12 output texture
         let nv12_desc = D3D11_TEXTURE2D_DESC {
-            Width: width,
-            Height: height,
+            Width: self.out_width,
+            Height: self.out_height,
             MipLevels: 1,
             ArraySize: 1,
             Format: DXGI_FORMAT_NV12,
@@ -395,8 +375,8 @@ impl Capturer {
 
         // 7) Execute the GPU blit
         let _idk = ManuallyDrop::new(Some(input_view.clone()));
-        let mut stream = windows::Win32::Graphics::Direct3D11::D3D11_VIDEO_PROCESSOR_STREAM {
-            Enable: windows::Win32::Foundation::TRUE,
+        let stream = D3D11_VIDEO_PROCESSOR_STREAM {
+            Enable: TRUE,
             pInputSurface: _idk,
             ..Default::default()
         };
@@ -406,5 +386,5 @@ impl Capturer {
         Ok(tex_nv12)
     }
 
-    unsafe extern "C" fn buffer_free(_opaque: *mut std::ffi::c_void, data: *mut u8) {}
+    unsafe extern "C" fn buffer_free(_opaque: *mut std::ffi::c_void, _data: *mut u8) {}
 }

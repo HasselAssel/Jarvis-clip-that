@@ -8,8 +8,8 @@ use crate::capturer::ring_buffer::RingBuffer;
 pub struct Saver {
     video_encoder: Arc<Mutex<ffmpeg_next::codec::encoder::Video>>,
     video_ring_buffer: Arc<Mutex<RingBuffer>>,
-    /*audio_encoder: Arc<Mutex<ffmpeg_next::codec::encoder::Audio>>,
-    audio_ring_buffer: Arc<Mutex<RingBuffer>>,*/
+    audio_encoder: Arc<Mutex<ffmpeg_next::codec::encoder::Audio>>,
+    audio_ring_buffer: Arc<Mutex<RingBuffer>>,
 
     out_dir_path: String,
     base_file_name: String,
@@ -20,7 +20,7 @@ pub struct Saver {
 }
 
 impl Saver {
-    pub fn new<S: Into<String>>(video_encoder: Arc<Mutex<ffmpeg_next::codec::encoder::Video>>, video_ring_buffer: Arc<Mutex<RingBuffer>>, /*audio_encoder: Arc<Mutex<ffmpeg_next::codec::encoder::Audio>>, audio_ring_buffer: Arc<Mutex<RingBuffer>>,*/ out_dir_path: S, base_file_name: S, extension: S) -> Self {
+    pub fn new<S: Into<String>>(video_encoder: Arc<Mutex<ffmpeg_next::codec::encoder::Video>>, video_ring_buffer: Arc<Mutex<RingBuffer>>, audio_encoder: Arc<Mutex<ffmpeg_next::codec::encoder::Audio>>, audio_ring_buffer: Arc<Mutex<RingBuffer>>, out_dir_path: S, base_file_name: S, extension: S) -> Self {
         let out_dir_path = out_dir_path.into();
         let base_file_name = base_file_name.into();
         let extension = extension.into();
@@ -36,8 +36,8 @@ impl Saver {
         Self {
             video_encoder,
             video_ring_buffer,
-            /*audio_encoder,
-            audio_ring_buffer,*/
+            audio_encoder,
+            audio_ring_buffer,
 
             out_dir_path,
             base_file_name,
@@ -69,16 +69,15 @@ impl Saver {
         let output_path = self.get_file_name();
 
         let mut octx: ffmpeg_next::format::context::Output = ffmpeg_next::format::output_as(&output_path, "mp4")?;
-        //let mut octx: ffmpeg_next::format::context::Output = ffmpeg_next::format::output(&output_path)?;
 
 
         let ring_buffer = self.video_ring_buffer.lock().unwrap();
         let video_packets = ring_buffer.get_slice(min_requested_frames);
         drop(ring_buffer);
 
-        /*let ring_buffer = self.audio_ring_buffer.lock().unwrap();
+        let ring_buffer = self.audio_ring_buffer.lock().unwrap();
         let audio_packets = ring_buffer.get_slice(min_requested_frames);
-        drop(ring_buffer);*/
+        drop(ring_buffer);
 
 
         let mut video_encoder_guard = self.video_encoder.lock().unwrap();
@@ -92,7 +91,7 @@ impl Saver {
         drop(video_encoder_guard);
 
 
-        /*let mut audio_encoder_guard = self.audio_encoder.lock().unwrap();
+        let mut audio_encoder_guard = self.audio_encoder.lock().unwrap();
         let audio_encoder = &mut *audio_encoder_guard;
         let audio_input_tb = audio_encoder.time_base();
         let audio_codec_id = audio_encoder.codec().unwrap().id();
@@ -100,14 +99,14 @@ impl Saver {
         let mut audio_ost = octx.add_stream(ffmpeg_next::codec::encoder::find(audio_codec_id))?;
         audio_ost.set_parameters(audio_encoder);
         audio_ost.set_time_base(audio_input_tb);
-        drop(audio_encoder_guard);*/
+        drop(audio_encoder_guard);
 
 
 
         octx.write_header()?;
 
         let output_tb_0 = octx.stream(0).unwrap().time_base();
-        //let output_tb_1 = octx.stream(1).unwrap().time_base();
+        let output_tb_1 = octx.stream(1).unwrap().time_base();
 
         for mut pkt in video_packets {
             pkt.set_stream(0);
@@ -115,11 +114,11 @@ impl Saver {
             pkt.write_interleaved(&mut octx)?;
         }
 
-        /*for mut pkt in audio_packets {
+        for mut pkt in audio_packets {
             pkt.set_stream(1);
             pkt.rescale_ts(audio_input_tb, output_tb_1);
             pkt.write_interleaved(&mut octx)?;
-        }*/
+        }
 
         octx.write_trailer()?;
 

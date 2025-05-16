@@ -9,7 +9,7 @@ edition = "2021"
 rand = "0.9.1"
 
 winapi = { version = "0.3.9", features = ["winuser", "wingdi", "winnt", "ntdef", "windef", "minwindef"] }
-windows = { version = "0.61.1", features = ["Win32_Graphics_Dxgi", "Win32_Graphics_Direct3D11", "Win32_Graphics_Direct3D", "Win32_System", "Win32_System_Threading", "Win32_Graphics_Dxgi_Common", "Win32_System_LibraryLoader", "Win32_Graphics_Gdi", "Win32_System_Memory"] }
+windows = { version = "0.61.1", features = ["Win32_Graphics_Dxgi", "Win32_Graphics_Direct3D11", "Win32_Graphics_Direct3D", "Win32_System", "Win32_System_Threading", "Win32_Graphics_Dxgi_Common", "Win32_System_LibraryLoader", "Win32_Graphics_Gdi", "Win32_System_Memory", "Win32_System_Com", "Win32_Media", "Win32_Media_Audio", "Win32_System_Com_StructuredStorage", "Win32_System_Variant"] }
 
 wasapi = "0.17.0"
 
