@@ -1,308 +1,401 @@
-use wasapi::{
-    initialize_mta, get_default_device, Device, AudioClient, AudioCaptureClient,
-    WaveFormat, SampleType, Direction, StreamMode,
-};
 use std::{sync::{Arc, Mutex}, thread};
-use std::collections::VecDeque;
 use std::thread::{JoinHandle, sleep};
 use std::time::{Duration, Instant};
+use ffmpeg_next::codec::Flags;
 use ffmpeg_next::frame::Audio;
-use windows::Win32::Media::Audio::{AUDCLNT_SHAREMODE_SHARED, AUDCLNT_STREAMFLAGS_LOOPBACK, eConsole, eRender, IAudioCaptureClient, IAudioClient, IMMDeviceEnumerator, MMDeviceEnumerator};
+use windows::Win32::Media::Audio::{AUDCLNT_BUFFERFLAGS_DATA_DISCONTINUITY, AUDCLNT_BUFFERFLAGS_SILENT, AUDCLNT_BUFFERFLAGS_TIMESTAMP_ERROR, AUDCLNT_SHAREMODE_SHARED, AUDCLNT_STREAMFLAGS_EVENTCALLBACK, AUDCLNT_STREAMFLAGS_LOOPBACK, eConsole, eRender, IAudioCaptureClient, IAudioClient, IMMDeviceEnumerator, MMDeviceEnumerator, WAVEFORMATEX};
 use windows::Win32::System::Com::CoCreateInstance;
-use crate::capturer::ring_buffer::{PacketWrapper, RingBuffer};
+use windows::Win32::System::Threading::{CreateEventW, INFINITE, WaitForSingleObject};
+use crate::capturer::_ring_buffer::{PacketWrapper, RingBuffer};
+use crate::com::*;
+
 
 pub struct AudioCapturer {
-    fps: i32,
-
     audio_encoder: Arc<Mutex<ffmpeg_next::codec::encoder::Audio>>,
     ring_buffer: Arc<Mutex<RingBuffer>>,
+
+    client: ComObj<IAudioClient>,
+    format: WAVEFORMATEX,
+
+    frame: Audio,
+    empty_frame: Audio,
 }
 
 impl AudioCapturer {
-    pub fn new(fps: i32, ring_buffer: Arc<Mutex<RingBuffer>>) -> (Self, Arc<Mutex<ffmpeg_next::codec::encoder::Audio>>) {
+    pub fn new(ring_buffer: Arc<Mutex<RingBuffer>>) -> (Self, Arc<Mutex<ffmpeg_next::codec::encoder::Audio>>) {
+        unsafe {
+            windows::Win32::System::Com::CoInitializeEx(None, windows::Win32::System::Com::COINIT_MULTITHREADED).unwrap();
+        }
+
+        let enumerator: IMMDeviceEnumerator = unsafe {
+            CoCreateInstance(
+                &MMDeviceEnumerator,
+                None,
+                windows::Win32::System::Com::CLSCTX_ALL,
+            ).unwrap()
+        };
+
+        let device = unsafe {
+            enumerator.GetDefaultAudioEndpoint(
+                eRender,
+                eConsole,
+            ).unwrap()
+        };
+
+        let client: IAudioClient = unsafe {
+            device.Activate(
+                windows::Win32::System::Com::CLSCTX_ALL,
+                None,
+            ).unwrap()
+        };
+
+        let format = unsafe { client.GetMixFormat().unwrap() };
+
+        /*unsafe {
+            client.Initialize(
+                AUDCLNT_SHAREMODE_SHARED,
+                AUDCLNT_STREAMFLAGS_LOOPBACK,
+                10000000,
+                0,
+                format,
+                None,
+            ).unwrap();
+        }*/
+        unsafe {
+            client.Initialize(
+                AUDCLNT_SHAREMODE_SHARED,
+                AUDCLNT_STREAMFLAGS_LOOPBACK | AUDCLNT_STREAMFLAGS_EVENTCALLBACK,
+                10000000,
+                0,
+                format,
+                None,
+            ).unwrap();
+        }
+        let format = unsafe { *format };
+
+        let client = ComObj(client);
+
+
         let codec = ffmpeg_next::codec::encoder::find(ffmpeg_next::codec::Id::AAC)
             .ok_or("AAC encoder not found").unwrap();
         let ctx = ffmpeg_next::codec::context::Context::new_with_codec(codec);
         let mut enc = ctx.encoder().audio().unwrap();
-        enc.set_rate(44_100);
+        enc.set_rate(format.nSamplesPerSec as i32);
         enc.set_channel_layout(ffmpeg_next::util::channel_layout::ChannelLayout::STEREO);
         enc.set_format(ffmpeg_next::format::Sample::F32(ffmpeg_next::util::format::sample::Type::Planar));
         //enc.set_bit_rate(128_000);
-        //enc.set_time_base((1, 44_100));
+        enc.set_time_base((1, format.nSamplesPerSec as i32));
+        enc.set_flags(Flags::GLOBAL_HEADER);
 
         let _a = enc.open_as(codec).unwrap();
+
+        let mut frame = Audio::new(
+            _a.format(),
+            1024,
+            _a.channel_layout(),
+        );
+        let mut empty_frame =  Audio::new(
+            _a.format(),
+            1024,
+            _a.channel_layout(),
+        );
+        Self::copy_into_frame(&mut empty_frame, vec![0u8; 1024 * format.nBlockAlign as usize]);
+
         let audio_encoder = Arc::new(Mutex::new(_a));
         let audio_encoder_return = Arc::clone(&audio_encoder);
 
+
         (Self {
-            fps,
             audio_encoder,
             ring_buffer,
+
+            client,
+            format,
+
+            frame,
+            empty_frame,
         },
          audio_encoder_return)
     }
 
-    pub fn start_capturing(self) -> JoinHandle<windows::core::Result<()>> {
+    pub fn _start_capturing(mut self) -> JoinHandle<windows::core::Result<()>> {
         thread::spawn(move || -> windows::core::Result<()> {
             unsafe {
-                windows::Win32::System::Com::CoInitializeEx(None, windows::Win32::System::Com::COINIT_MULTITHREADED).unwrap();
+                let capture_client: IAudioCaptureClient = self.client.GetService()?;
+                self.client.Start()?;
 
-                let enumerator: IMMDeviceEnumerator = CoCreateInstance(
-                    &MMDeviceEnumerator,
-                    None,
-                    windows::Win32::System::Com::CLSCTX_ALL,
-                )?;
-
-                let device = enumerator.GetDefaultAudioEndpoint(
-                    eRender,
-                    eConsole,
-                )?;
-
-                let client: IAudioClient = device.Activate(
-                    windows::Win32::System::Com::CLSCTX_ALL,
-                    None,
-                )?;
-
-                let mut format = client.GetMixFormat()?;
-
-                client.Initialize(
-                    AUDCLNT_SHAREMODE_SHARED,
-                    AUDCLNT_STREAMFLAGS_LOOPBACK,
-                    10000000,
-                    0,
-                    format,
-                    None,
-                )?;
-
-                let capture_client: IAudioCaptureClient = client.GetService()?;
-                client.Start()?;
-
-                /*Ok(Self {
-                client,
-                capture_client,
-                format: *format,
-            })*/
-
-                let mut pts_counter = 0;
-
+                let mut pts_counter: i64 = 0;
                 let mut total_buffer = Vec::new();
 
-                unsafe {
-                    loop {
-                        let mut packet_length = 0;
-                        let mut data = std::ptr::null_mut();
-                        let mut flags = 0;
+                loop {
+                    let mut packet_length = 0;
+                    let mut data = std::ptr::null_mut();
+                    let mut flags = 0;
 
-                        capture_client.GetBuffer(
-                            &mut data,
-                            &mut packet_length,
-                            &mut flags,
-                            None,
-                            None,
-                        )?;
+                    capture_client.GetBuffer(
+                        &mut data,
+                        &mut packet_length,
+                        &mut flags,
+                        None,
+                        None,
+                    )?;
 
-                        if packet_length > 0 {
-                            let buffer = std::slice::from_raw_parts(
-                                data as *const u8,
-                                packet_length as usize * (*format).nBlockAlign as usize,
-                            );
-
-                            println!("NBLOCK: {}", (*format).nBlockAlign as usize);
-
-                            assert_eq!(buffer.len() % 8, 0);
-                            total_buffer.extend_from_slice(buffer);
+                    if packet_length > 0 {
+                        println!("JA DATA: {}", packet_length);
+                        let buffer = std::slice::from_raw_parts(
+                            data as *const u8,
+                            packet_length as usize * self.format.nBlockAlign as usize,
+                        );
+                        total_buffer.extend_from_slice(buffer);
+                        capture_client.ReleaseBuffer(packet_length)?;
 
 
-                            capture_client.ReleaseBuffer(packet_length)?;
+                        assert_eq!(buffer.len() % 8, 0);
+                        while total_buffer.len() >= 1024 * self.format.nBlockAlign as usize {
+                            let buffer: Vec<u8> = total_buffer.drain(..1024 * self.format.nBlockAlign as usize).collect();
 
-                            while total_buffer.len() >= 1024 * (*format).nBlockAlign as usize {
-                                let buffer: Vec<u8> = total_buffer.drain(..1024 * (*format).nBlockAlign as usize).collect();
+                            let sample_frames = 1024;//packet_length as usize; //buffer.len() / (*format).nBlockAlign as usize;
 
-                                let sample_frames = 1024;//packet_length as usize; //buffer.len() / (*format).nBlockAlign as usize;
-                                let mut encoder = self.audio_encoder.lock().unwrap();
-                                let mut frame = Audio::new(
-                                    encoder.format(),
-                                    sample_frames,
-                                    encoder.channel_layout(),
-                                );
+                            Self::copy_into_frame(&mut self.frame, buffer);
+                            self.frame.set_pts(Some(pts_counter));
 
-                                let (left, right): (Vec<u8>, Vec<u8>) = buffer.chunks(8)
-                                    .fold((Vec::with_capacity(buffer.len() / 2), Vec::with_capacity(buffer.len() / 2)), |(mut left, mut right), chunk| {
-                                        if chunk.len() >= 8 {
-                                            left.extend_from_slice(&chunk[0..4]);
-                                            right.extend_from_slice(&chunk[4..8]);
-                                        } else {
-                                            println!("Data not divisible by 8");
-                                        }
-                                        (left, right)
-                                    });
+                            self.send_frame_to_enc(sample_frames);
 
-                                // Fill frame data
-                                let linesize = unsafe { (*frame.as_ptr()).linesize[0] as usize };
-                                println!("LINE SIZE: {}", linesize);
-                                println!("sample_frames: {}", sample_frames);
-                                println!("packet_length: {}", packet_length);
-                                let ptr0 = unsafe { (*frame.as_ptr()).extended_data.offset(0).read() };
-                                let ptr1 = unsafe { (*frame.as_ptr()).extended_data.offset(1).read() };
-
-                                let left_plane = unsafe { std::slice::from_raw_parts_mut(ptr0, linesize) };
-                                let right_plane = unsafe { std::slice::from_raw_parts_mut(ptr1, linesize) };
-
-                                //let mut dst_data = frame.data_mut(0);
-                                //dst_data.copy_from_slice(&l);
-                                left_plane.copy_from_slice(&left);
-                                right_plane.copy_from_slice(&right);
-
-
-                                frame.set_pts(Some(/* calculate PTS */pts_counter));
-
-                                pts_counter += sample_frames as i64;
-
-                                // Send to encoder
-                                encoder.send_frame(&frame).unwrap();
-
-                                // Receive packets
-                                let mut packet = ffmpeg_next::Packet::empty();
-                                while encoder.receive_packet(&mut packet).is_ok() {
-                                    let mut ring_buffer = self.ring_buffer.lock().unwrap();
-                                    ring_buffer.insert(PacketWrapper::new(0, packet.clone()));
-                                    drop(ring_buffer);
-                                    packet = ffmpeg_next::codec::packet::Packet::empty();
-                                }
-
-                                drop(encoder);
-                            }
-                        } else {
-                            println!("NO DATA :(");
+                            pts_counter += sample_frames as i64;
                         }
+                    } else {
+                        println!("NO DATA WTF!!!!!");
                     }
+                    sleep(Duration::from_millis(20));
                 }
-
-                Ok(())
             }
+            Ok(())
         })
     }
 
-    pub fn _start_capturing(self) -> JoinHandle<Result<(), ()>> {
-        thread::spawn(move || -> Result<(), ()> {
-            let frame_duration: Duration = Duration::from_secs_f64(1.0f64 / (self.fps as f64));
-            let mut elapsed: Duration;
-            let mut expected_elapsed: Duration;
-            let mut start_time: Instant;
+    pub fn __start_capturing(mut self) -> JoinHandle<windows::core::Result<()>> {
+        thread::spawn(move || -> windows::core::Result<()> {
+            unsafe {
+                let mut pts_counter: i64 = 0;
+                let mut total_buffer = Vec::new();
 
 
-            let mut frame_counter = 0;
+                let event = CreateEventW(None, false, false, None).unwrap();
+                self.client.SetEventHandle(event).unwrap();
 
-            initialize_mta().unwrap();
+                let capture_client: IAudioCaptureClient = self.client.GetService()?;
 
-            let device: Device = get_default_device(&Direction::Render).unwrap();
-            let mut audio_client: AudioClient = device.get_iaudioclient().unwrap();
+                self.client.Start()?;
 
-            let format = WaveFormat::new(
-                32, 32, &SampleType::Float, 44_100, 2, None,
-            );
-            let mode = StreamMode::EventsShared {
-                autoconvert: true,
-                buffer_duration_hns: 200_000,
-            };
-            audio_client.initialize_client(
-                &format,
-                &Direction::Capture,
-                &mode,
-            ).unwrap();
+                let mut freq = 0;
+                let mut start_time = 0;
+                windows::Win32::System::Performance::QueryPerformanceFrequency(&mut freq)?;
+                windows::Win32::System::Performance::QueryPerformanceCounter(&mut start_time)?;
 
-            let event_handle = audio_client.set_get_eventhandle().unwrap();
-            let capture_client: AudioCaptureClient = audio_client.get_audiocaptureclient().unwrap();
+                let mut last_pts = -1024;
 
-            audio_client.start_stream().unwrap();
+                loop {
+                    WaitForSingleObject(event, INFINITE);
 
-            let mut left_buffer = VecDeque::new();
-            let mut right_buffer = VecDeque::new();
+                    let mut packet_length = 0;
+                    let mut data = std::ptr::null_mut();
+                    let mut flags = 0;
 
-            let mut zähler = 0;
+                    let mut device_pos = 0;
+                    let mut qpc_pos = 0;
+                    capture_client.GetBuffer(
+                        &mut data,
+                        &mut packet_length,
+                        &mut flags,
+                        Some(&mut device_pos),
+                        Some(&mut qpc_pos),
+                    )?;
+
+                    if packet_length > 0 {
+                        let new_pts = ((qpc_pos - start_time as u64) * 48000u64 / freq as u64) as i64;
+                        let diff = (new_pts - pts_counter).max(0);
+                        if diff >= 1024 { println!("ADDED SILENCE!!!"); total_buffer.extend(vec![0u8; (diff * self.format.nBlockAlign as i64) as usize]); }
 
 
-            loop {
-                start_time = Instant::now();
-                for i in 0..u32::MAX {
-                    elapsed = start_time.elapsed();
+                        let buffer = std::slice::from_raw_parts(
+                            data as *const u8,
+                            packet_length as usize * self.format.nBlockAlign as usize,
+                        );
 
-                    expected_elapsed = frame_duration.saturating_mul(i);
-                    if expected_elapsed > elapsed {
-                        sleep(expected_elapsed - elapsed);
+                        assert_eq!(buffer.len() % 8, 0);
+                        total_buffer.extend_from_slice(buffer);
+
+                        capture_client.ReleaseBuffer(packet_length)?;
                     }
-                    zähler += 1;
 
-                    event_handle.wait_for_event(u32::MAX).unwrap();
+                    while total_buffer.len() >= 1024 * self.format.nBlockAlign as usize {
+                        let buffer: Vec<u8> = total_buffer.drain(..1024 * self.format.nBlockAlign as usize).collect();
+                        let sample_frames = 1024;//packet_length as usize; //buffer.len() / (*format).nBlockAlign as usize;
 
-                    if let Ok(Some(next_packets_frames)) = capture_client.get_next_packet_size() {
-                        if next_packets_frames == 0 {
-                            continue;
-                        }
-                        let format = audio_client.get_mixformat().unwrap();
-                        let bytes_per_frame = format.wave_fmt.Format.nBlockAlign;
-                        let bytes_needed = next_packets_frames * bytes_per_frame as u32;
+                        Self::copy_into_frame(&mut self.frame, buffer);
+                        self.frame.set_pts(Some(pts_counter));
 
-                        let bytes_per_piped_ffmpeg_frame = ((1024 / 2) * bytes_per_frame) as usize;
+                        self.send_frame_to_enc((pts_counter - last_pts) as i32);
 
-                        let mut buffer = vec![0u8; bytes_needed as usize];
-                        if let Ok((n, flags)) = capture_client.read_from_device(&mut buffer) {
-                            let mut audio_frame = ffmpeg_next::frame::Audio::new(ffmpeg_next::format::Sample::F32(ffmpeg_next::util::format::sample::Type::Planar), /*next_packets_frames*/1024usize, ffmpeg_next::util::channel_layout::ChannelLayout::STEREO);
-                            audio_frame.set_rate(/*format.wave_fmt.Format.nSamplesPerSec*/ 44_100);
-
-                            let (left, right): (Vec<u8>, Vec<u8>) = buffer.chunks(8)
-                                .fold((Vec::new(), Vec::new()), |(mut left, mut right), chunk| {
-                                    if chunk.len() >= 8 {
-                                        left.extend_from_slice(&chunk[0..4]);
-                                        right.extend_from_slice(&chunk[4..8]);
-                                    } else {
-                                        println!("Data not divisible by 8");
-                                    }
-                                    (left, right)
-                                });
-                            left_buffer.extend(left);
-                            right_buffer.extend(right);
-
-                            if left_buffer.len() < bytes_per_piped_ffmpeg_frame || right_buffer.len() < bytes_per_piped_ffmpeg_frame {
-                                continue;
-                            }
-
-                            let linesize = unsafe { (*audio_frame.as_ptr()).linesize[0] as usize };
-                            let ptr0 = unsafe { (*audio_frame.as_ptr()).extended_data.offset(0).read() };
-                            let ptr1 = unsafe { (*audio_frame.as_ptr()).extended_data.offset(1).read() };
-
-                            let left_plane = unsafe { std::slice::from_raw_parts_mut(ptr0, linesize) };
-                            let right_plane = unsafe { std::slice::from_raw_parts_mut(ptr1, linesize) };
-
-                            let mut dst_data = audio_frame.data_mut(0);
-                            //left_plane.copy_from_slice(&left);
-                            let l: Vec<u8> = left_buffer.drain(0..bytes_per_piped_ffmpeg_frame).collect();
-                            let r: Vec<u8> = right_buffer.drain(0..bytes_per_piped_ffmpeg_frame).collect();
-                            dst_data.copy_from_slice(&l);
-                            right_plane.copy_from_slice(&r);
-
-                            //audio_frame.set_pts(Some(frame_counter));
-                            audio_frame.set_pts(Some((zähler * 44_100 / self.fps) as i64));
-                            frame_counter += next_packets_frames as i64;
-
-                            let mut audio_encoder = self.audio_encoder.lock().unwrap();
-                            audio_encoder.send_frame(&audio_frame).unwrap();
-
-                            let mut packet: ffmpeg_next::codec::packet::Packet = ffmpeg_next::codec::packet::Packet::empty();
-
-                            println!("helo");
-                            while let Ok(_) = audio_encoder.receive_packet(&mut packet) {
-                                let mut ring_buffer = self.ring_buffer.lock().unwrap();
-                                ring_buffer.insert(PacketWrapper::new(0, packet.clone()));
-                                drop(ring_buffer);
-                                packet = ffmpeg_next::codec::packet::Packet::empty();
-                            }
-                            drop(audio_encoder)
-                        }
+                        last_pts = pts_counter;
+                        pts_counter += sample_frames as i64;
                     }
                 }
             }
-            //audio_client.stop_stream().unwrap();
+            Ok(())
         })
+    }
+
+    pub fn start_capturing(mut self) -> JoinHandle<windows::core::Result<()>> {
+        thread::spawn(move || -> windows::core::Result<()> {
+            unsafe {
+                let mut pts_counter: i64 = 0;
+                let mut total_buffer = Vec::new();
+
+
+                let event = CreateEventW(None, false, false, None).unwrap();
+                self.client.SetEventHandle(event).unwrap();
+
+                let capture_client: IAudioCaptureClient = self.client.GetService()?;
+
+                self.client.Start()?;
+
+                let mut freq = 0;
+                let mut start_time = 0;
+                windows::Win32::System::Performance::QueryPerformanceFrequency(&mut freq)?;
+                windows::Win32::System::Performance::QueryPerformanceCounter(&mut start_time)?;
+
+                loop {
+                    WaitForSingleObject(event, INFINITE);
+
+                    let mut packet_length = 0;
+                    let mut data = std::ptr::null_mut();
+                    let mut flags = 0;
+
+                    let mut device_pos = 0;
+                    let mut qpc_pos = 0;
+                    capture_client.GetBuffer(
+                        &mut data,
+                        &mut packet_length,
+                        &mut flags,
+                        Some(&mut device_pos),
+                        Some(&mut qpc_pos),
+                    )?;
+
+                    if packet_length > 0 {
+                        let new_pts = ((qpc_pos - start_time as u64) * 48000u64 / freq as u64) as i64;
+                        let diff = (new_pts - pts_counter).max(0);
+                        if diff >= 1024 {
+                            println!("ADDED SILENCE!!!");
+                            self.flush_and_silence(&mut total_buffer, diff, &mut pts_counter);
+                        }
+
+
+                        let buffer = std::slice::from_raw_parts(
+                            data as *const u8,
+                            packet_length as usize * self.format.nBlockAlign as usize,
+                        );
+
+                        assert_eq!(buffer.len() % 8, 0);
+                        total_buffer.extend_from_slice(buffer);
+
+                        capture_client.ReleaseBuffer(packet_length)?;
+                    }
+
+                    while total_buffer.len() >= 1024 * self.format.nBlockAlign as usize {
+                        let buffer: Vec<u8> = total_buffer.drain(..1024 * self.format.nBlockAlign as usize).collect();
+                        let sample_frames = 1024;//packet_length as usize; //buffer.len() / (*format).nBlockAlign as usize;
+
+                        Self::copy_into_frame(&mut self.frame, buffer);
+                        self.frame.set_pts(Some(pts_counter));
+                        self.send_frame_to_enc(1024);
+
+                        pts_counter += sample_frames as i64;
+                    }
+                }
+            }
+            Ok(())
+        })
+    }
+
+    fn flush_and_silence(&mut self, vec_to_be_flushed: &mut Vec<u8>, mut frames_of_silence: i64, start_pts: &mut i64) {
+        // flush
+        let mut buffer = vec![0; 1024 * self.format.nBlockAlign as usize];
+        assert!(buffer.len() > vec_to_be_flushed.len());
+        println!("vec_to_be_flushed.len(): {}", vec_to_be_flushed.len());
+        let flushed_pts = (buffer.len() - vec_to_be_flushed.len()) / self.format.nBlockAlign as usize;
+        assert_eq!(flushed_pts * self.format.nBlockAlign as usize, buffer.len() - vec_to_be_flushed.len());
+        buffer[..vec_to_be_flushed.len()].copy_from_slice(vec_to_be_flushed);
+        frames_of_silence -= flushed_pts as i64;
+        Self::copy_into_frame(&mut self.frame, buffer);
+        self.frame.set_pts(Some(*start_pts));
+        self.send_frame_to_enc(1024);
+        *start_pts += 1024;
+
+        // empty frames
+        let mut encoder = self.audio_encoder.lock().unwrap();
+        let whole_silent_frames = frames_of_silence / 1024;//frames_of_silence & !(1024-1); // frames_of_silence / 1024 * 1024;
+        let mut i = 0;
+        println!("{}, {}", whole_silent_frames, frames_of_silence);
+        for _ in 0..whole_silent_frames {
+            self.empty_frame.set_pts(Some(*start_pts));
+            encoder.send_frame(&self.empty_frame).unwrap();
+            *start_pts += 1024;
+            i += 1;
+            // drain packets!!!
+
+            // Receive packets
+            let mut packet = ffmpeg_next::Packet::empty();
+            while encoder.receive_packet(&mut packet).is_ok() {
+                let mut ring_buffer = self.ring_buffer.lock().unwrap();
+                ring_buffer.insert(PacketWrapper::new(i * 1024/*1024*/, packet.clone()));
+                drop(ring_buffer);
+                i = 0;
+            }
+
+        }
+        println!("he done!");
+        drop(encoder);
+    }
+
+    fn copy_into_frame(frame: &mut Audio, buffer: Vec<u8>) {
+        let linesize = unsafe { (*frame.as_ptr()).linesize[0] as usize };
+        let ptr0 = unsafe { (*frame.as_ptr()).extended_data.offset(0).read() };
+        let ptr1 = unsafe { (*frame.as_ptr()).extended_data.offset(1).read() };
+        // Get mutable slices to the destination planes first
+        let left_plane = unsafe { std::slice::from_raw_parts_mut(ptr0, linesize) };
+        let right_plane = unsafe { std::slice::from_raw_parts_mut(ptr1, linesize) };
+
+        // Process buffer directly into planes
+        for (i, chunk) in buffer.chunks(8).enumerate() {
+            if chunk.len() >= 8 {
+                let offset = i * 4;
+                if offset + 4 > left_plane.len() || offset + 4 > right_plane.len() {
+                    panic!("Destination planes too small");
+                }
+                left_plane[offset..offset + 4].copy_from_slice(&chunk[0..4]);
+                right_plane[offset..offset + 4].copy_from_slice(&chunk[4..8]);
+            } else {
+                panic!("Data not divisible by 8");
+            }
+        }
+    }
+
+    fn send_frame_to_enc(&self, mut frame_amount_for_ring_buffer: i32) {
+        let mut encoder = self.audio_encoder.lock().unwrap();
+        encoder.send_frame(&self.frame).unwrap();
+
+        // Receive packets
+        let mut packet = ffmpeg_next::Packet::empty();
+        while encoder.receive_packet(&mut packet).is_ok() {
+            let mut ring_buffer = self.ring_buffer.lock().unwrap();
+            ring_buffer.insert(PacketWrapper::new(frame_amount_for_ring_buffer/*1024*/, packet.clone()));
+            drop(ring_buffer);
+            frame_amount_for_ring_buffer = 0;
+        }
+
+        drop(encoder);
     }
 }
+
+//TODO: Clean Code!!!! Insert Silence when clipping!!!!
