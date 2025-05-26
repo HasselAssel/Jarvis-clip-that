@@ -1,7 +1,5 @@
 use std::thread;
 use std::thread::JoinHandle;
-use crate::capturer::saver::Saver;
-
 
 #[derive(Default)]
 struct KeyFlags {
@@ -11,14 +9,14 @@ struct KeyFlags {
 
 pub struct KeyListener {
     key_flags: KeyFlags,
-    saver: Saver,
+    action: fn(),
 }
 
 impl KeyListener {
-    pub fn new(saver: Saver) -> Self {
+    pub fn new(action: fn()) -> Self {
         Self {
-            saver,
             key_flags: KeyFlags::default(),
+            action,
         }
     }
 
@@ -28,6 +26,7 @@ impl KeyListener {
                 match event.event_type {
                     rdev::EventType::KeyPress(rdev::Key::ControlLeft) => self.key_flags.ctrl = true,
                     rdev::EventType::KeyRelease(rdev::Key::ControlLeft) => self.key_flags.ctrl = false,
+
                     rdev::EventType::KeyPress(rdev::Key::KeyN) => self.key_flags.n = true,
                     rdev::EventType::KeyRelease(rdev::Key::KeyN) => self.key_flags.n = false,
                     _ => {}
@@ -35,7 +34,7 @@ impl KeyListener {
 
                 if self.key_flags.ctrl && self.key_flags.n {
                     self.key_flags.n = false;
-                    self.saver.standard_save(None).unwrap();
+                    (self.action)()//.standard_save(None).unwrap();
                 }
             };
 

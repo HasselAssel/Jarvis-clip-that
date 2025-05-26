@@ -1,4 +1,4 @@
-use std::{ptr, thread};
+/*use std::{ptr, thread};
 use std::mem::ManuallyDrop;
 use std::ptr::null_mut;
 use std::sync::{Arc, Mutex};
@@ -16,16 +16,17 @@ use windows::Win32::Graphics::Direct3D11::{D3D11_BIND_RENDER_TARGET, D3D11_BIND_
 use windows::Win32::Graphics::Dxgi::{DXGI_OUTDUPL_DESC, DXGI_OUTDUPL_FRAME_INFO, IDXGIAdapter, IDXGIDevice, IDXGIOutput, IDXGIOutput1, IDXGIOutputDuplication, IDXGIResource};
 use windows::Win32::Graphics::Dxgi::Common::{DXGI_FORMAT_B8G8R8A8_UNORM, DXGI_FORMAT_NV12, DXGI_SAMPLE_DESC};
 
-use crate::capturer::ring_buffer::{PacketWrapper, RingBuffer};
+use crate::capturer::_ring_buffer::{PacketWrapper, RingBuffer};
+use crate::capturer::ring_buffer::PacketRingBuffer;
 
-pub struct Capturer {
+pub struct VideoCapturer<P: PacketRingBuffer> {
     fps: i32,
     out_width: u32,
     out_height: u32,
     in_width: u32,
     in_height: u32,
 
-    ring_buffer: Arc<Mutex<RingBuffer>>,
+    ring_buffer: Arc<Mutex<P>>,
     video_encoder: Arc<Mutex<ffmpeg_next::codec::encoder::Video>>,
 
     duplication: IDXGIOutputDuplication,
@@ -35,7 +36,7 @@ pub struct Capturer {
     hw_frame_ctx: usize,
 }
 
-impl Capturer {
+impl<P: PacketRingBuffer> VideoCapturer<P> {
     pub fn new(fps: i32, out_width: u32, out_height: u32, ring_buffer: Arc<Mutex<RingBuffer>>) -> (Self, Arc<Mutex<ffmpeg_next::codec::encoder::Video>>) {
         let mut device: Option<ID3D11Device> = None;
         let mut context: Option<ID3D11DeviceContext> = None;
@@ -111,8 +112,8 @@ impl Capturer {
         let raw_ctx = unsafe { enc.as_mut_ptr() };
 
         unsafe {
-            (*raw_ctx).hw_device_ctx = ffmpeg_next::sys::av_buffer_ref(hw_device_ctx);
-            (*raw_ctx).hw_frames_ctx = ffmpeg_next::sys::av_buffer_ref(hw_frame_ctx);
+            (*raw_ctx).hw_device_ctx = av_buffer_ref(hw_device_ctx);
+            (*raw_ctx).hw_frames_ctx = av_buffer_ref(hw_frame_ctx);
         }
 
         enc.set_width(out_width);
@@ -278,7 +279,7 @@ impl Capturer {
 
                     let mut ring_buffer = self.ring_buffer.lock().unwrap();
                     while let Ok(_) = video_encoder.receive_packet(&mut packet) {
-                        ring_buffer.insert(PacketWrapper::new(packet_sent_frames_counter, packet.clone()));
+                        ring_buffer.insert(packet.clone());
                         packet_sent_frames_counter = 0;
                     }
                     drop(ring_buffer);
@@ -387,4 +388,4 @@ impl Capturer {
     }
 
     unsafe extern "C" fn buffer_free(_opaque: *mut std::ffi::c_void, _data: *mut u8) {}
-}
+}*/

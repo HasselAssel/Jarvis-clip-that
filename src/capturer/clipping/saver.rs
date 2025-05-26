@@ -2,14 +2,18 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::thread;
 use chrono::Local;
+use ffmpeg_next::codec::encoder::{Video, Audio};
+use ffmpeg_next::{codec, Packet};
 use rand::seq::IteratorRandom;
-use crate::capturer::ring_buffer::RingBuffer;
+use crate::capturer::capture::recorder::{Recorder, RecorderCarrier};
+use crate::capturer::capture::video_capturer::VideoCapturer;
+use crate::capturer::error::IdkCustomErrorIGuess;
+use crate::capturer::ring_buffer::{KeyFrameStartPacketWrapper, PacketRingBuffer, RingBuffer};
+use crate::capturer::capture::recorder::VideoParams;
 
 pub struct Saver {
-    video_encoder: Arc<Mutex<ffmpeg_next::codec::encoder::Video>>,
-    video_ring_buffer: Arc<Mutex<RingBuffer>>,
-    audio_encoder: Arc<Mutex<ffmpeg_next::codec::encoder::Audio>>,
-    audio_ring_buffer: Arc<Mutex<RingBuffer>>,
+    video_parameters: VideoParams,
+    audio_parameters: VideoParams,
 
     out_dir_path: String,
     base_file_name: String,
@@ -20,7 +24,7 @@ pub struct Saver {
 }
 
 impl Saver {
-    pub fn new<S: Into<String>>(video_encoder: Arc<Mutex<ffmpeg_next::codec::encoder::Video>>, video_ring_buffer: Arc<Mutex<RingBuffer>>, audio_encoder: Arc<Mutex<ffmpeg_next::codec::encoder::Audio>>, audio_ring_buffer: Arc<Mutex<RingBuffer>>, out_dir_path: S, base_file_name: S, extension: S) -> Self {
+    pub fn new<S: Into<String>>(video_parameters: VideoParams, audio_parameters: VideoParams, out_dir_path: S, base_file_name: S, extension: S) -> Self {
         let out_dir_path = out_dir_path.into();
         let base_file_name = base_file_name.into();
         let extension = extension.into();
@@ -34,10 +38,8 @@ impl Saver {
             std::fs::create_dir_all(&output_dir).expect("Failed to create output directory");
         }
         Self {
-            video_encoder,
-            video_ring_buffer,
-            audio_encoder,
-            audio_ring_buffer,
+            video_parameters,
+            audio_parameters,
 
             out_dir_path,
             base_file_name,
@@ -65,41 +67,42 @@ impl Saver {
         }
     }
 
-    pub fn standard_save(&self, min_requested_frames: Option<i32>) -> std::result::Result<(), ffmpeg_next::Error> {
+    pub fn standard_save<P: PacketRingBuffer, R: Recorder<P>>(&self, video_capturers: RecorderCarrier<P, R>, audio_capturers: RecorderCarrier<P, R>, min_requested_frames: Option<i32>) -> Result<(), IdkCustomErrorIGuess> {
         let output_path = self.get_file_name();
 
         let mut octx: ffmpeg_next::format::context::Output = ffmpeg_next::format::output_as(&output_path, "mp4")?;
 
 
-        let ring_buffer = self.video_ring_buffer.lock().unwrap();
-        let video_packets = ring_buffer.get_slice(min_requested_frames);
+        let ring_buffer = video_capturers.ring_buffer.lock().unwrap();  // TODO: not just index 0!
+        let mut video_packets = ring_buffer.copy_out(min_requested_frames);
         drop(ring_buffer);
+        let offset = video_packets.iter().map(|a| a.pts().unwrap_or(i64::MAX)).min().unwrap_or(0);
+        let max = video_packets.iter().map(|a| a.pts().unwrap_or(i64::MIN)).max().unwrap_or(0);
+        println!("video: min: {}, max: {}", offset, max);
+        Self::adjust_pts(&mut video_packets, offset);
 
-        let ring_buffer = self.audio_ring_buffer.lock().unwrap();
-        let audio_packets = ring_buffer.get_slice(min_requested_frames);
+        let ring_buffer = audio_capturers.ring_buffer.lock().unwrap();  // TODO: not just index 0!
+        let mut audio_packets = ring_buffer.copy_out(min_requested_frames);
         drop(ring_buffer);
+        let offset = ((offset - 1/*WEIRD BUT MAYBE GOOD*/) * 1600/*48000 / 30*/);// & 0x7FFFFFFFFFFFFC00i64; // TODO: NOT FINAL!!!!!!!!!!
+        let _offset = audio_packets.iter().map(|a| a.pts().unwrap_or(i64::MAX)).min().unwrap_or(0);
+        let max = audio_packets.iter().map(|a| a.pts().unwrap_or(i64::MIN)).max().unwrap_or(0);
+        println!("audio: min: {}, max: {}, used offset: {}", _offset, max, offset);
+        Self::adjust_pts(&mut audio_packets, offset);
+
+        println!("{:?}", video_packets.iter().map(|p| p.pts().unwrap()).collect::<Vec<_>>());
+        println!("{:?}", audio_packets.iter().map(|p| p.pts().unwrap()).collect::<Vec<_>>());
 
 
-        let mut video_encoder_guard = self.video_encoder.lock().unwrap();
-        let video_encoder = &mut *video_encoder_guard;
-        let video_input_tb = video_encoder.time_base();
-        let video_codec_id = video_encoder.codec().unwrap().id();
 
-        let mut video_ost = octx.add_stream(ffmpeg_next::codec::encoder::find(video_codec_id))?;
-        video_ost.set_parameters(video_encoder);
-        video_ost.set_time_base(video_input_tb);
-        drop(video_encoder_guard);
+        let mut video_ost = octx.add_stream(codec::encoder::find(self.video_parameters.codec))?;
+        let params = video_ost.parameters();
+        video_ost.set_parameters(self.video_parameters.parameters.clone());
+        video_ost.set_time_base(self.video_parameters.time_base);
 
-
-        let mut audio_encoder_guard = self.audio_encoder.lock().unwrap();
-        let audio_encoder = &mut *audio_encoder_guard;
-        let audio_input_tb = audio_encoder.time_base();
-        let audio_codec_id = audio_encoder.codec().unwrap().id();
-
-        let mut audio_ost = octx.add_stream(ffmpeg_next::codec::encoder::find(audio_codec_id))?;
-        audio_ost.set_parameters(audio_encoder);
-        audio_ost.set_time_base(audio_input_tb);
-        drop(audio_encoder_guard);
+        let mut audio_ost = octx.add_stream(codec::encoder::find(self.audio_parameters.codec))?;
+        audio_ost.set_parameters(self.audio_parameters.parameters.clone());
+        audio_ost.set_time_base(self.audio_parameters.time_base);
 
 
 
@@ -110,13 +113,13 @@ impl Saver {
 
         for mut pkt in video_packets {
             pkt.set_stream(0);
-            pkt.rescale_ts(video_input_tb, output_tb_0);
+            pkt.rescale_ts(self.video_parameters.time_base, output_tb_0);
             pkt.write_interleaved(&mut octx)?;
         }
 
         for mut pkt in audio_packets {
             pkt.set_stream(1);
-            pkt.rescale_ts(audio_input_tb, output_tb_1);
+            pkt.rescale_ts(self.audio_parameters.time_base, output_tb_1);
             pkt.write_interleaved(&mut octx)?;
         }
 
@@ -125,6 +128,13 @@ impl Saver {
         let _ = self.play_sound();
 
         Ok(())
+    }
+
+    pub fn adjust_pts(packets: &mut [Packet], offset: i64) {
+        packets.iter_mut().for_each(|a| {
+            if let Some(pts) = a.pts() { a.set_pts(Some(pts - offset)); }
+            if let Some(dts) = a.dts() { a.set_dts(Some(dts - offset)); }
+        });
     }
 
     fn play_sound(&self) -> Result<(), std::io::ErrorKind> {
@@ -157,7 +167,7 @@ impl Saver {
             // Play the sound
             sink.set_volume(0.05);
             sink.append(source);
-            sink.sleep_until_end();
+            sink.sleep_until_end(); // Todo maybe different thread!! blocks main!
         });
 
         Ok(())

@@ -1,28 +1,31 @@
-use std::{sync::{Arc, Mutex}, thread};
-use std::thread::{JoinHandle, sleep};
-use std::time::{Duration, Instant};
+/*use std::{sync::{Arc, Mutex}, thread};
+use std::thread::JoinHandle;
+
 use ffmpeg_next::codec::Flags;
 use ffmpeg_next::frame::Audio;
-use windows::Win32::Media::Audio::{AUDCLNT_BUFFERFLAGS_DATA_DISCONTINUITY, AUDCLNT_BUFFERFLAGS_SILENT, AUDCLNT_BUFFERFLAGS_TIMESTAMP_ERROR, AUDCLNT_SHAREMODE_SHARED, AUDCLNT_STREAMFLAGS_EVENTCALLBACK, AUDCLNT_STREAMFLAGS_LOOPBACK, eConsole, eRender, IAudioCaptureClient, IAudioClient, IMMDeviceEnumerator, MMDeviceEnumerator, WAVEFORMATEX};
+use windows::Win32::Media::Audio::{AUDCLNT_SHAREMODE_SHARED, AUDCLNT_STREAMFLAGS_EVENTCALLBACK, AUDCLNT_STREAMFLAGS_LOOPBACK, eConsole, eRender, IAudioCaptureClient, IAudioClient, IMMDeviceEnumerator, MMDeviceEnumerator, WAVEFORMATEX};
 use windows::Win32::System::Com::CoCreateInstance;
 use windows::Win32::System::Threading::{CreateEventW, INFINITE, WaitForSingleObject};
-use crate::capturer::_ring_buffer::{PacketWrapper, RingBuffer};
+
+use crate::capturer::_ring_buffer::RingBuffer;
+use crate::capturer::ring_buffer::PacketRingBuffer;
 use crate::com::*;
 
-
-pub struct AudioCapturer {
+pub struct AudioCapturer<P: PacketRingBuffer> {
     audio_encoder: Arc<Mutex<ffmpeg_next::codec::encoder::Audio>>,
-    ring_buffer: Arc<Mutex<RingBuffer>>,
+    ring_buffer: Arc<Mutex<P>>,
 
     client: ComObj<IAudioClient>,
     format: WAVEFORMATEX,
 
     frame: Audio,
     empty_frame: Audio,
+
+    event: Arc<windows::Win32::Foundation::HANDLE>,
 }
 
-impl AudioCapturer {
-    pub fn new(ring_buffer: Arc<Mutex<RingBuffer>>) -> (Self, Arc<Mutex<ffmpeg_next::codec::encoder::Audio>>) {
+impl<P: PacketRingBuffer> AudioCapturer<P> {
+    pub fn new(ring_buffer: Arc<Mutex<RingBuffer>>) -> (Self, Arc<Mutex<ffmpeg_next::codec::encoder::Audio>>, Arc<windows::Win32::Foundation::HANDLE>) {
         unsafe {
             windows::Win32::System::Com::CoInitializeEx(None, windows::Win32::System::Com::COINIT_MULTITHREADED).unwrap();
         }
@@ -51,16 +54,6 @@ impl AudioCapturer {
 
         let format = unsafe { client.GetMixFormat().unwrap() };
 
-        /*unsafe {
-            client.Initialize(
-                AUDCLNT_SHAREMODE_SHARED,
-                AUDCLNT_STREAMFLAGS_LOOPBACK,
-                10000000,
-                0,
-                format,
-                None,
-            ).unwrap();
-        }*/
         unsafe {
             client.Initialize(
                 AUDCLNT_SHAREMODE_SHARED,
@@ -72,6 +65,13 @@ impl AudioCapturer {
             ).unwrap();
         }
         let format = unsafe { *format };
+
+        let event;
+        unsafe {
+            event = CreateEventW(None, false, false, None).unwrap();
+            client.SetEventHandle(event).unwrap();
+        }
+        let event = Arc::new(event);
 
         let client = ComObj(client);
 
@@ -94,7 +94,7 @@ impl AudioCapturer {
             1024,
             _a.channel_layout(),
         );
-        let mut empty_frame =  Audio::new(
+        let mut empty_frame = Audio::new(
             _a.format(),
             1024,
             _a.channel_layout(),
@@ -114,136 +114,9 @@ impl AudioCapturer {
 
             frame,
             empty_frame,
+            event
         },
-         audio_encoder_return)
-    }
-
-    pub fn _start_capturing(mut self) -> JoinHandle<windows::core::Result<()>> {
-        thread::spawn(move || -> windows::core::Result<()> {
-            unsafe {
-                let capture_client: IAudioCaptureClient = self.client.GetService()?;
-                self.client.Start()?;
-
-                let mut pts_counter: i64 = 0;
-                let mut total_buffer = Vec::new();
-
-                loop {
-                    let mut packet_length = 0;
-                    let mut data = std::ptr::null_mut();
-                    let mut flags = 0;
-
-                    capture_client.GetBuffer(
-                        &mut data,
-                        &mut packet_length,
-                        &mut flags,
-                        None,
-                        None,
-                    )?;
-
-                    if packet_length > 0 {
-                        println!("JA DATA: {}", packet_length);
-                        let buffer = std::slice::from_raw_parts(
-                            data as *const u8,
-                            packet_length as usize * self.format.nBlockAlign as usize,
-                        );
-                        total_buffer.extend_from_slice(buffer);
-                        capture_client.ReleaseBuffer(packet_length)?;
-
-
-                        assert_eq!(buffer.len() % 8, 0);
-                        while total_buffer.len() >= 1024 * self.format.nBlockAlign as usize {
-                            let buffer: Vec<u8> = total_buffer.drain(..1024 * self.format.nBlockAlign as usize).collect();
-
-                            let sample_frames = 1024;//packet_length as usize; //buffer.len() / (*format).nBlockAlign as usize;
-
-                            Self::copy_into_frame(&mut self.frame, buffer);
-                            self.frame.set_pts(Some(pts_counter));
-
-                            self.send_frame_to_enc(sample_frames);
-
-                            pts_counter += sample_frames as i64;
-                        }
-                    } else {
-                        println!("NO DATA WTF!!!!!");
-                    }
-                    sleep(Duration::from_millis(20));
-                }
-            }
-            Ok(())
-        })
-    }
-
-    pub fn __start_capturing(mut self) -> JoinHandle<windows::core::Result<()>> {
-        thread::spawn(move || -> windows::core::Result<()> {
-            unsafe {
-                let mut pts_counter: i64 = 0;
-                let mut total_buffer = Vec::new();
-
-
-                let event = CreateEventW(None, false, false, None).unwrap();
-                self.client.SetEventHandle(event).unwrap();
-
-                let capture_client: IAudioCaptureClient = self.client.GetService()?;
-
-                self.client.Start()?;
-
-                let mut freq = 0;
-                let mut start_time = 0;
-                windows::Win32::System::Performance::QueryPerformanceFrequency(&mut freq)?;
-                windows::Win32::System::Performance::QueryPerformanceCounter(&mut start_time)?;
-
-                let mut last_pts = -1024;
-
-                loop {
-                    WaitForSingleObject(event, INFINITE);
-
-                    let mut packet_length = 0;
-                    let mut data = std::ptr::null_mut();
-                    let mut flags = 0;
-
-                    let mut device_pos = 0;
-                    let mut qpc_pos = 0;
-                    capture_client.GetBuffer(
-                        &mut data,
-                        &mut packet_length,
-                        &mut flags,
-                        Some(&mut device_pos),
-                        Some(&mut qpc_pos),
-                    )?;
-
-                    if packet_length > 0 {
-                        let new_pts = ((qpc_pos - start_time as u64) * 48000u64 / freq as u64) as i64;
-                        let diff = (new_pts - pts_counter).max(0);
-                        if diff >= 1024 { println!("ADDED SILENCE!!!"); total_buffer.extend(vec![0u8; (diff * self.format.nBlockAlign as i64) as usize]); }
-
-
-                        let buffer = std::slice::from_raw_parts(
-                            data as *const u8,
-                            packet_length as usize * self.format.nBlockAlign as usize,
-                        );
-
-                        assert_eq!(buffer.len() % 8, 0);
-                        total_buffer.extend_from_slice(buffer);
-
-                        capture_client.ReleaseBuffer(packet_length)?;
-                    }
-
-                    while total_buffer.len() >= 1024 * self.format.nBlockAlign as usize {
-                        let buffer: Vec<u8> = total_buffer.drain(..1024 * self.format.nBlockAlign as usize).collect();
-                        let sample_frames = 1024;//packet_length as usize; //buffer.len() / (*format).nBlockAlign as usize;
-
-                        Self::copy_into_frame(&mut self.frame, buffer);
-                        self.frame.set_pts(Some(pts_counter));
-
-                        self.send_frame_to_enc((pts_counter - last_pts) as i32);
-
-                        last_pts = pts_counter;
-                        pts_counter += sample_frames as i64;
-                    }
-                }
-            }
-            Ok(())
-        })
+         audio_encoder_return, Arc::clone(&event))
     }
 
     pub fn start_capturing(mut self) -> JoinHandle<windows::core::Result<()>> {
@@ -252,10 +125,6 @@ impl AudioCapturer {
                 let mut pts_counter: i64 = 0;
                 let mut total_buffer = Vec::new();
 
-
-                let event = CreateEventW(None, false, false, None).unwrap();
-                self.client.SetEventHandle(event).unwrap();
-
                 let capture_client: IAudioCaptureClient = self.client.GetService()?;
 
                 self.client.Start()?;
@@ -266,7 +135,7 @@ impl AudioCapturer {
                 windows::Win32::System::Performance::QueryPerformanceCounter(&mut start_time)?;
 
                 loop {
-                    WaitForSingleObject(event, INFINITE);
+                    WaitForSingleObject(*self.event, INFINITE);
 
                     let mut packet_length = 0;
                     let mut data = std::ptr::null_mut();
@@ -348,11 +217,10 @@ impl AudioCapturer {
             let mut packet = ffmpeg_next::Packet::empty();
             while encoder.receive_packet(&mut packet).is_ok() {
                 let mut ring_buffer = self.ring_buffer.lock().unwrap();
-                ring_buffer.insert(PacketWrapper::new(i * 1024/*1024*/, packet.clone()));
+                ring_buffer.insert(packet.clone());
                 drop(ring_buffer);
                 i = 0;
             }
-
         }
         println!("he done!");
         drop(encoder);
@@ -389,13 +257,13 @@ impl AudioCapturer {
         let mut packet = ffmpeg_next::Packet::empty();
         while encoder.receive_packet(&mut packet).is_ok() {
             let mut ring_buffer = self.ring_buffer.lock().unwrap();
-            ring_buffer.insert(PacketWrapper::new(frame_amount_for_ring_buffer/*1024*/, packet.clone()));
+            ring_buffer.insert(packet.clone());
             drop(ring_buffer);
             frame_amount_for_ring_buffer = 0;
         }
 
         drop(encoder);
     }
-}
+}*/
 
 //TODO: Clean Code!!!! Insert Silence when clipping!!!!

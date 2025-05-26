@@ -1,9 +1,9 @@
-use std::sync::{Arc, Mutex};
+/*use std::sync::{Arc, Mutex};
 use crate::capturer::audio_capturer::AudioCapturer;
 
-use crate::capturer::capturer::Capturer;
+use crate::capturer::video_capturer::Capturer;
 use crate::capturer::key_listener::KeyListener;
-use crate::capturer::ring_buffer::RingBuffer;
+use crate::capturer::_ring_buffer::RingBuffer;
 use crate::capturer::saver::Saver;
 
 pub struct Clipper {
@@ -21,11 +21,11 @@ pub struct Clipper {
 impl Clipper {
     pub fn new(fps: i32, width: u32, height: u32, max_seconds: i32) -> Self {
         let video_ring_buffer: Arc<Mutex<RingBuffer>> = Arc::new(Mutex::new(RingBuffer::new(fps * max_seconds)));
-        let audio_ring_buffer: Arc<Mutex<RingBuffer>> = Arc::new(Mutex::new(RingBuffer::new(44_100 * max_seconds)));
+        let audio_ring_buffer: Arc<Mutex<RingBuffer>> = Arc::new(Mutex::new(RingBuffer::new(48_000 * max_seconds)));
 
 
         let (capturer, video_encoder) = Capturer::new(fps, width, height, Arc::clone(&video_ring_buffer));
-        let (audio_capturer, audio_encoder) = AudioCapturer::new(fps,Arc::clone(&audio_ring_buffer));
+        let (audio_capturer, audio_encoder) = AudioCapturer::new(Arc::clone(&audio_ring_buffer));
         let saver = Saver::new(Arc::clone(&video_encoder), Arc::clone(&video_ring_buffer), Arc::clone(&audio_encoder), Arc::clone(&audio_ring_buffer), "out", "Chat Clip That", ".mp4");
         let key_listener = KeyListener::new(saver);
 
@@ -48,8 +48,8 @@ impl Clipper {
         let listen_join = self.key_listener.start_key_listener();
         let audio_join = self.audio_capturer.start_capturing();
 
+        audio_join.join().unwrap().unwrap();
         capture_join.join().unwrap().unwrap();
         listen_join.join().unwrap();
-        audio_join.join().unwrap().unwrap();
     }
-}
+}*/

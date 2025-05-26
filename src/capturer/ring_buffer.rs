@@ -1,172 +1,82 @@
 use std::collections::VecDeque;
-use std::ops::{Deref, DerefMut};
+use ffmpeg_next::Packet;
 
-pub struct PacketWrapper {
-    frame_amount: i32,
-    buffer: ffmpeg_next::codec::packet::Packet,
+pub trait PacketRingBuffer: Sync + Send {
+    fn insert(&mut self, packet: Packet);
+    fn copy_out(&self, min_requested_frames: Option<i32>) -> Vec<Packet>;
 }
 
-pub struct PacketWrappersWrapper {
-    frame_amount: i32,
-    buffer: Vec<PacketWrapper>,
+trait PacketHandler: Sized + Sync + Send{
+    fn insert(container: &mut VecDeque<Self>, packet: Packet);
+    fn get_duration(&self) -> i64;
 }
 
-pub struct RingBuffer {
-    frame_counter: i32,
-    buffer: VecDeque<PacketWrappersWrapper>,
-    min_frame_amount: i32,
+pub struct RingBuffer<T: PacketHandler> {
+    frame_counter: i64,
+    buffer: VecDeque<T>,
+    min_frame_amount: i64,
 }
 
-impl PacketWrapper {
-    pub fn new(frame_amount: i32, buffer: ffmpeg_next::codec::packet::Packet) -> Self {
-        Self {
-            frame_amount,
-            buffer,
-        }
-    }
+#[derive(Default)]
+pub struct KeyFrameStartPacketWrapper {
+    buffer: Vec<Packet>,
 }
 
-impl PacketWrappersWrapper {
-    pub fn new() -> Self {
-        Self {
-            frame_amount: 0,
-            buffer: Vec::new(),
-        }
-    }
-
-    pub fn insert(&mut self, packet: PacketWrapper) {
-        self.frame_amount += packet.frame_amount;
-        self.buffer.push(packet);
-    }
-}
-
-impl RingBuffer {
-    pub fn new(requested_frame_amount: i32) -> Self {
+impl<T: PacketHandler> RingBuffer<T> {
+    pub fn new(min_frame_amount: u32) -> Self {
         Self {
             frame_counter: 0,
             buffer: VecDeque::new(),
-            min_frame_amount: requested_frame_amount,
+            min_frame_amount: min_frame_amount as i64,
         }
     }
-    
-    pub fn insert(&mut self, packet: PacketWrapper) {
-        self.frame_counter += packet.frame_amount;
+}
 
-        while let Some(front) = self.buffer.front_mut() {
-            if self.frame_counter - front.frame_amount > self.min_frame_amount {
-                self.frame_counter -= front.frame_amount;
+impl<T: PacketHandler> PacketRingBuffer for RingBuffer<T> {
+    fn insert(&mut self, packet: Packet) {
+        self.frame_counter += packet.duration();
+
+        T::insert(&mut self.buffer, packet);
+
+        while let Some(front) = self.buffer.front() {
+            if self.frame_counter - front.get_duration() > self.min_frame_amount {
+                self.frame_counter -= front.get_duration();
                 self.buffer.pop_front();
             } else {
                 break;
             }
         }
-
-        let packet_wrappers_wrapper = {
-            let reuse = self.buffer.back()
-                .map(|_back| packet.flags().bits() != ffmpeg_next::ffi::AV_PKT_FLAG_KEY)
-                .unwrap_or(false);
-            if reuse {
-                self.buffer.back_mut()
-            } else {
-                self.buffer.push_back(PacketWrappersWrapper::new());
-                self.buffer.back_mut()
-            }
-        }.unwrap();
-
-        packet_wrappers_wrapper.insert(packet);
     }
 
-    pub fn get_slice(&self, min_requested_frames: Option<i32>) -> Vec<ffmpeg_next::codec::packet::Packet> {
-        let mut returned_vec = if let Some(min_requested_frames) = min_requested_frames {
-            let mut i: usize = 0;
-            let mut frames = 0;
-            let mut vec = Vec::new();
-            while min_requested_frames > frames {
-                let pww = &self.buffer[i];
-                vec.extend(pww.buffer.iter().map(|a| a.buffer.clone()));
-                i += 1;
-                frames += pww.frame_amount;
-            }
-            vec
-        } else {
-            let packets: Vec<ffmpeg_next::codec::packet::Packet> = self.buffer.iter().flat_map(|b| b.buffer.iter().map(|b| b.buffer.clone())).collect();
-            packets
-        };
-        let pts_offset: i64 = returned_vec.iter().map(|a| a.pts().unwrap_or(i64::MAX)).min().unwrap_or(0);
-        returned_vec.iter_mut().for_each(|a| {
-            if let Some(pts) = a.pts() { a.set_pts(Some(pts - pts_offset)); }
-            if let Some(dts) = a.dts() { a.set_dts(Some(dts - pts_offset)); }
-        });
-
-        returned_vec
+    fn copy_out(&self, min_requested_frames: Option<i32>) -> Vec<Packet> {
+        todo!()
     }
 }
 
-impl Deref for PacketWrapper {
-    type Target = ffmpeg_next::packet::Packet;
+impl PacketHandler for Packet {
+    fn insert(container: &mut VecDeque<Self>, packet: Packet) {
+        container.push_back(packet);
+    }
 
-    fn deref(&self) -> &Self::Target {
-        &self.buffer
+    fn get_duration(&self) -> i64 {
+        self.duration()
     }
 }
 
-impl Deref for PacketWrappersWrapper {
-    type Target = Vec<PacketWrapper>;
+impl PacketHandler for KeyFrameStartPacketWrapper {
+    fn insert(container: &mut VecDeque<Self>, packet: Packet) {
+        let needs_new = container.back().map_or(true, |item| item.buffer.last().unwrap().is_key());
 
-    fn deref(&self) -> &Self::Target {
-        &self.buffer
-    }
-}
-
-impl Deref for RingBuffer {
-    type Target = VecDeque<PacketWrappersWrapper>;
-
-    fn deref(&self) -> &Self::Target {
-        &self.buffer
-    }
-}
-
-impl DerefMut for PacketWrapper {
-    fn deref_mut(&mut self) -> &mut ffmpeg_next::packet::Packet {
-        &mut self.buffer
-    }
-}
-
-impl DerefMut for PacketWrappersWrapper {
-    fn deref_mut(&mut self) -> &mut Vec<PacketWrapper> {
-        &mut self.buffer
-    }
-}
-
-impl DerefMut for RingBuffer {
-    fn deref_mut(&mut self) -> &mut VecDeque<PacketWrappersWrapper> {
-        &mut self.buffer
-    }
-}
-
-impl<'a> IntoIterator for &'a mut PacketWrappersWrapper {
-    type Item = &'a mut PacketWrapper;
-    type IntoIter = std::slice::IterMut<'a, PacketWrapper>;
-
-    fn into_iter(self) -> Self::IntoIter {
-        self.buffer.iter_mut()
-    }
-}
-
-impl<'a> IntoIterator for &'a PacketWrappersWrapper {
-    type Item = &'a PacketWrapper;
-    type IntoIter = std::slice::Iter<'a, PacketWrapper>;
-
-    fn into_iter(self) -> Self::IntoIter {
-        self.buffer.iter()
-    }
-}
-
-impl Clone for PacketWrapper {
-    fn clone(&self) -> Self {
-        Self {
-            frame_amount: self.frame_amount,
-            buffer: self.buffer.clone(),
+        if needs_new {
+            container.push_back(KeyFrameStartPacketWrapper::default());
         }
+
+        // Now it's guaranteed to be non-empty and valid
+        let target_self = container.back_mut().unwrap();
+        target_self.buffer.push(packet);
+    }
+
+    fn get_duration(&self) -> i64 {
+        self.buffer.iter().map(|item| item.duration()).sum()
     }
 }
