@@ -77,7 +77,7 @@ impl RingBuffer {
     }
 
     pub fn get_slice(&self, min_requested_frames: Option<i32>) -> Vec<ffmpeg_next::codec::packet::Packet> {
-        let mut returned_vec = if let Some(min_requested_frames) = min_requested_frames {
+        let returned_vec = if let Some(min_requested_frames) = min_requested_frames {
             let mut i: usize = self.buffer.len();
             let mut frames = 0;
             let mut vec = VecDeque::new();

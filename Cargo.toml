@@ -13,7 +13,7 @@ windows = { version = "0.61.1", features = ["Win32_Graphics_Dxgi", "Win32_Graphi
 
 wasapi = "0.17.0"
 
-ffmpeg-next = "7.1.0"
+ffmpeg-next = { version = "7.1.0", default-features = false, features = ["codec", "format", "software-scaling"] }
 
 rdev = "0.5.3"
 

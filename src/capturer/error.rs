@@ -1,3 +1,4 @@
+#[derive(Debug)]
 pub enum IdkCustomErrorIGuess{
     FFMPEG(ffmpeg_next::Error),
     WINDOWS(windows::core::Error),

@@ -1,24 +1,22 @@
-use std::ptr::null_mut;
-use std::sync::{Arc, Mutex};
-use std::{ptr, thread};
-use std::mem::ManuallyDrop;
-use std::thread::{JoinHandle, sleep};
-use std::time::{Duration, Instant};
-use ffmpeg_next::codec::Parameters;
-use ffmpeg_next::ffi::{av_buffer_create, av_buffer_ref, av_buffer_unref, av_frame_alloc, av_hwdevice_ctx_alloc, av_hwdevice_ctx_init, av_hwframe_ctx_init, av_hwframe_get_buffer, AVBufferRef, AVFrame, AVHWDeviceType};
-use ffmpeg_next::ffi::AVPixelFormat::AV_PIX_FMT_D3D11;
-use ffmpeg_next::codec::encoder::Video;
-use ffmpeg_next::Packet;
-use windows::core::Interface;
-use windows::Win32::Foundation::{HMODULE, TRUE};
-use windows::Win32::Graphics::Direct3D11::{D3D11_BIND_RENDER_TARGET, D3D11_BIND_SHADER_RESOURCE, D3D11_CREATE_DEVICE_BGRA_SUPPORT, D3D11_SDK_VERSION, D3D11_TEX2D_VPIV, D3D11_TEX2D_VPOV, D3D11_TEXTURE2D_DESC, D3D11_USAGE_DEFAULT, D3D11_VIDEO_FRAME_FORMAT_PROGRESSIVE, D3D11_VIDEO_PROCESSOR_CONTENT_DESC, D3D11_VIDEO_PROCESSOR_INPUT_VIEW_DESC, D3D11_VIDEO_PROCESSOR_INPUT_VIEW_DESC_0, D3D11_VIDEO_PROCESSOR_OUTPUT_VIEW_DESC, D3D11_VIDEO_PROCESSOR_OUTPUT_VIEW_DESC_0, D3D11_VIDEO_PROCESSOR_STREAM, D3D11_VPIV_DIMENSION_TEXTURE2D, D3D11_VPOV_DIMENSION_TEXTURE2D, D3D11CreateDevice, ID3D11Device, ID3D11DeviceContext, ID3D11Texture2D, ID3D11VideoContext, ID3D11VideoDevice, ID3D11VideoProcessor, ID3D11VideoProcessorEnumerator, ID3D11VideoProcessorInputView, ID3D11VideoProcessorOutputView};
-use windows::Win32::Graphics::Direct3D::{D3D_DRIVER_TYPE_HARDWARE, D3D_FEATURE_LEVEL_10_0, D3D_FEATURE_LEVEL_11_0};
-use windows::Win32::Graphics::Dxgi::{DXGI_OUTDUPL_DESC, DXGI_OUTDUPL_FRAME_INFO, IDXGIAdapter, IDXGIDevice, IDXGIOutput, IDXGIOutput1, IDXGIOutputDuplication, IDXGIResource};
-use windows::Win32::Graphics::Dxgi::Common::{DXGI_FORMAT_B8G8R8A8_UNORM, DXGI_FORMAT_NV12, DXGI_SAMPLE_DESC};
 use crate::capturer::capture::recorder::Recorder;
+use crate::capturer::capture::recorder::VideoParams;
 use crate::capturer::error::IdkCustomErrorIGuess;
 use crate::capturer::ring_buffer::PacketRingBuffer;
-use crate::capturer::capture::recorder::VideoParams;
+use ffmpeg_next::codec::encoder::Video;
+use ffmpeg_next::ffi::AVPixelFormat::AV_PIX_FMT_D3D11;
+use ffmpeg_next::ffi::{av_buffer_create, av_buffer_ref, av_buffer_unref, av_frame_alloc, av_hwdevice_ctx_alloc, av_hwdevice_ctx_init, av_hwframe_ctx_init, av_hwframe_get_buffer, AVBufferRef, AVFrame, AVHWDeviceType};
+use std::mem::ManuallyDrop;
+use std::ptr::null_mut;
+use std::sync::{Arc, Mutex};
+use std::thread::{sleep, JoinHandle};
+use std::time::{Duration, Instant};
+use std::{ptr, thread};
+use windows::core::Interface;
+use windows::Win32::Foundation::{HMODULE, TRUE};
+use windows::Win32::Graphics::Direct3D::{D3D_DRIVER_TYPE_HARDWARE, D3D_FEATURE_LEVEL_10_0, D3D_FEATURE_LEVEL_11_0};
+use windows::Win32::Graphics::Direct3D11::{D3D11CreateDevice, ID3D11Device, ID3D11DeviceContext, ID3D11Texture2D, ID3D11VideoContext, ID3D11VideoDevice, ID3D11VideoProcessor, ID3D11VideoProcessorEnumerator, ID3D11VideoProcessorInputView, ID3D11VideoProcessorOutputView, D3D11_BIND_RENDER_TARGET, D3D11_BIND_SHADER_RESOURCE, D3D11_CREATE_DEVICE_BGRA_SUPPORT, D3D11_SDK_VERSION, D3D11_TEX2D_VPIV, D3D11_TEX2D_VPOV, D3D11_TEXTURE2D_DESC, D3D11_USAGE_DEFAULT, D3D11_VIDEO_FRAME_FORMAT_PROGRESSIVE, D3D11_VIDEO_PROCESSOR_CONTENT_DESC, D3D11_VIDEO_PROCESSOR_INPUT_VIEW_DESC, D3D11_VIDEO_PROCESSOR_INPUT_VIEW_DESC_0, D3D11_VIDEO_PROCESSOR_OUTPUT_VIEW_DESC, D3D11_VIDEO_PROCESSOR_OUTPUT_VIEW_DESC_0, D3D11_VIDEO_PROCESSOR_STREAM, D3D11_VPIV_DIMENSION_TEXTURE2D, D3D11_VPOV_DIMENSION_TEXTURE2D};
+use windows::Win32::Graphics::Dxgi::Common::{DXGI_FORMAT_B8G8R8A8_UNORM, DXGI_FORMAT_NV12, DXGI_SAMPLE_DESC};
+use windows::Win32::Graphics::Dxgi::{IDXGIAdapter, IDXGIDevice, IDXGIOutput, IDXGIOutput1, IDXGIOutputDuplication, IDXGIResource, DXGI_OUTDUPL_DESC, DXGI_OUTDUPL_FRAME_INFO};
 
 pub struct VideoCapturer<P: PacketRingBuffer + 'static> {
     fps: i32,
@@ -38,7 +36,7 @@ pub struct VideoCapturer<P: PacketRingBuffer + 'static> {
 }
 
 impl<P: PacketRingBuffer> VideoCapturer<P> {
-    pub fn new(ring_buffer: Arc<Mutex<P>>, fps: i32, out_width: u32, out_height: u32) -> (Self, VideoParams) {
+    pub fn new(ring_buffer: Arc<Mutex<P>>, video_params: &VideoParams) -> Self {
         let mut device: Option<ID3D11Device> = None;
         let mut context: Option<ID3D11DeviceContext> = None;
         // hmmm maybe safe, maybe unsafe, who knows
@@ -63,8 +61,8 @@ impl<P: PacketRingBuffer> VideoCapturer<P> {
             pub device: *mut ID3D11Device,
         }
 
-        let codec = ffmpeg_next::codec::encoder::find_by_name("hevc_amf")
-            .ok_or(ffmpeg_next::Error::EncoderNotFound).unwrap();
+        //let codec = ffmpeg_next::codec::encoder::find_by_name("hevc_amf").ok_or(ffmpeg_next::Error::EncoderNotFound).unwrap();
+        let codec = video_params.base_params.codec;
 
         let ctx = ffmpeg_next::codec::context::Context::new_with_codec(codec);
 
@@ -100,8 +98,8 @@ impl<P: PacketRingBuffer> VideoCapturer<P> {
         let frames_ctx = unsafe { &mut *((*hw_frame_ctx).data as *mut ffmpeg_next::sys::AVHWFramesContext) };
         frames_ctx.format = ffmpeg_next::sys::AVPixelFormat::AV_PIX_FMT_D3D11;
         frames_ctx.sw_format = ffmpeg_next::sys::AVPixelFormat::AV_PIX_FMT_NV12;
-        frames_ctx.width = out_width as i32;
-        frames_ctx.height = out_height as i32;
+        frames_ctx.width = video_params.out_width as i32;
+        frames_ctx.height = video_params.out_height as i32;
         frames_ctx.initial_pool_size = 0;
 
         let ret = unsafe { av_hwframe_ctx_init(hw_frame_ctx) };
@@ -117,16 +115,15 @@ impl<P: PacketRingBuffer> VideoCapturer<P> {
             (*raw_ctx).hw_frames_ctx = av_buffer_ref(hw_frame_ctx);
         }
 
-        enc.set_width(out_width);
-        enc.set_height(out_height);
-        enc.set_format(ffmpeg_next::format::Pixel::D3D11);
-        enc.set_time_base((1, fps));
-        enc.set_frame_rate(Some((fps, 1)));
-        enc.set_bit_rate(8_000_000);
-        enc.set_max_bit_rate(10_000_000);
-
-        enc.set_flags(ffmpeg_next::codec::Flags::GLOBAL_HEADER); // Extradata is generated
-        enc.set_gop(fps as u32); // Keyframe interval (1 second)
+        enc.set_width(video_params.out_width);
+        enc.set_height(video_params.out_height);
+        enc.set_format(video_params.format); //enc.set_format(ffmpeg_next::format::Pixel::D3D11);
+        enc.set_time_base((1, video_params.base_params.rate));
+        enc.set_frame_rate(Some((video_params.base_params.rate, 1)));
+        enc.set_bit_rate(video_params.base_params.bit_rate);
+        enc.set_max_bit_rate(video_params.base_params.max_bit_rate);
+        enc.set_flags(video_params.base_params.flags);
+        enc.set_gop(video_params.base_params.rate as u32); // Keyframe interval (1 second)
 
         let video_encoder = enc.open_as(codec).unwrap();
 
@@ -153,16 +150,10 @@ impl<P: PacketRingBuffer> VideoCapturer<P> {
         let in_width: u32 = out_desc.ModeDesc.Width;
         let in_height: u32 = out_desc.ModeDesc.Height;
 
-        let vret = VideoParams {
-            parameters: Parameters::from(video_encoder),
-            time_base: Rational(),
-            codec: Id::None,
-        };
-
-        (Self {
-            fps,
-            out_width,
-            out_height,
+        Self {
+            fps: video_params.base_params.rate,
+            out_width: video_params.out_width,
+            out_height: video_params.out_height,
             in_width,
             in_height,
 
@@ -173,8 +164,8 @@ impl<P: PacketRingBuffer> VideoCapturer<P> {
             context,
 
             device,
-            hw_frame_ctx: hw_frame_ctx as usize,
-        }, vret)
+            hw_frame_ctx: hw_frame_ctx as usize, // TODO!!!
+        }
     }
 
     pub unsafe fn convert_rgba_to_nv12(&self, tex_rgba: &ID3D11Texture2D) -> windows::core::Result<ID3D11Texture2D> {
@@ -378,8 +369,7 @@ impl<P: PacketRingBuffer> Recorder<P> for VideoCapturer<P> {
 
                     frame.set_pts(Some(total_frames_counter));
 
-                    let mut video_encoder = self.video_encoder.lock().unwrap();
-                    Self::send_frame_and_receive_packets(&self.ring_buffer, &mut video_encoder, &frame);
+                    Self::send_frame_and_receive_packets(&self.ring_buffer, &mut self.video_encoder, &frame);
                 }
             }
         })

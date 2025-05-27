@@ -1,9 +1,8 @@
-use std::sync::{Arc, Mutex};
-use std::thread::JoinHandle;
-use ffmpeg_next::{codec, Packet, rational};
-use ffmpeg_next::codec::Id;
 use crate::capturer::error::IdkCustomErrorIGuess;
 use crate::capturer::ring_buffer::PacketRingBuffer;
+use ffmpeg_next::{codec, ChannelLayout, Packet};
+use std::sync::{Arc, Mutex};
+use std::thread::JoinHandle;
 
 pub struct RecorderCarrier<P: PacketRingBuffer, R: Recorder<P>> {
     recorder: Option<R>,
@@ -41,13 +40,29 @@ pub trait Recorder<R: PacketRingBuffer> {
     }
 }
 
-struct BaseParams {
-
+#[derive(Clone)]
+pub struct BaseParams {
+    pub codec: codec::codec::Codec,
+    pub bit_rate: usize,
+    pub max_bit_rate: usize,
+    pub flags: codec::flag::Flags,
+    pub rate: i32, // "fps"
 }
 
+#[derive(Clone)]
 pub struct VideoParams {
     pub base_params: BaseParams,
-    pub parameters: codec::Parameters,
-    pub time_base: rational::Rational,
-    pub codec: Id,
+
+    pub out_width: u32,
+    pub out_height: u32,
+    pub format: ffmpeg_next::util::format::pixel::Pixel,
+}
+
+#[derive(Clone)]
+pub struct AudioParams {
+    pub base_params: BaseParams,
+
+    pub channel_layout: ChannelLayout,
+    pub format: ffmpeg_next::util::format::sample::Sample,
+
 }

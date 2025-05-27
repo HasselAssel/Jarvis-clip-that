@@ -1,0 +1,12 @@
+[env]
+# These tell ffmpeg-sys-next where to find your bundled FFmpeg:
+FFMPEG_PKG_CONFIG_PATH = { value = "", force = true }
+FFMPEG_INCLUDE_DIR = { value = "C:\\Users\\armin\\RustroverProjects\\Jarvis-clip-that\\ffmpeg\\include", relative = true }
+FFMPEG_LIB_DIR     = { value = "C:\\Users\\armin\\RustroverProjects\\Jarvis-clip-that\\ffmpeg\\lib",     relative = true }
+
+FFMPEG_STATIC = { value = "0", force = true }
+PKG_CONFIG_ALLOW_SYSTEM_LIBS = { value = "0", force = true }
+PKG_CONFIG_ALLOW_SYSTEM_CFLAGS = { value = "0", force = true }
+
+FFMPEG_DIR = "C:\\Users\\armin\\RustroverProjects\\Jarvis-clip-that\\ffmpeg"
+LIBCLANG_PATH = "C:\\Program Files\\LLVM\\bin"
