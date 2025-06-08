@@ -1,4 +1,5 @@
-use crate::capturer::capture::recorder::{AudioParams, Recorder};
+use std::collections::VecDeque;
+use crate::capturer::capture::recorder::{AudioParams, BaseParams, Recorder};
 use crate::capturer::error::IdkCustomErrorIGuess;
 use crate::capturer::ring_buffer::PacketRingBuffer;
 use crate::com::ComObj;
@@ -6,11 +7,13 @@ use ffmpeg_next::codec::encoder::Audio;
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::thread::JoinHandle;
+use ffmpeg_next::codec::{Flags, Parameters};
 use windows::Win32::Foundation::HANDLE;
 use windows::Win32::Media::Audio::{eConsole, eRender, IAudioCaptureClient, IAudioClient, IMMDeviceEnumerator, MMDeviceEnumerator, AUDCLNT_SHAREMODE_SHARED, AUDCLNT_STREAMFLAGS_EVENTCALLBACK, AUDCLNT_STREAMFLAGS_LOOPBACK, WAVEFORMATEX};
 use windows::Win32::System::Com::CoCreateInstance;
 use windows::Win32::System::Threading::{CreateEventW, WaitForSingleObject, INFINITE};
 
+const AAC_FRAME_SIZE: usize = 1024;
 pub struct AudioCapturer<P: PacketRingBuffer + 'static> {
     audio_encoder: Audio,
     ring_buffer: Arc<Mutex<P>>,
@@ -25,7 +28,7 @@ pub struct AudioCapturer<P: PacketRingBuffer + 'static> {
 }
 
 impl<P: PacketRingBuffer> AudioCapturer<P> {
-    pub fn new(ring_buffer: Arc<Mutex<P>>, audio_params: &AudioParams) -> Self { // Todo: Make the construction more general!
+    pub fn new(ring_buffer: Arc<Mutex<P>>) -> (Self, Parameters) {
         unsafe {
             windows::Win32::System::Com::CoInitializeEx(None, windows::Win32::System::Com::COINIT_MULTITHREADED).unwrap();
         }
@@ -58,7 +61,7 @@ impl<P: PacketRingBuffer> AudioCapturer<P> {
             client.Initialize(
                 AUDCLNT_SHAREMODE_SHARED,
                 AUDCLNT_STREAMFLAGS_LOOPBACK | AUDCLNT_STREAMFLAGS_EVENTCALLBACK,
-                10000000,
+                10_000_000,
                 0,
                 format,
                 None,
@@ -76,35 +79,52 @@ impl<P: PacketRingBuffer> AudioCapturer<P> {
         let client = ComObj(client);
 
 
+        let audio_params = AudioParams{
+            base_params: BaseParams {
+                codec: ffmpeg_next::codec::encoder::find(ffmpeg_next::codec::Id::AAC).ok_or(ffmpeg_next::Error::EncoderNotFound).unwrap(),
+                bit_rate: 128_000,
+                max_bit_rate: 150_000,
+                flags: Flags::GLOBAL_HEADER,
+                rate: format.nSamplesPerSec as i32,
+            },
+            channel_layout: ffmpeg_next::util::channel_layout::ChannelLayout::STEREO,
+            format: ffmpeg_next::format::Sample::F32(ffmpeg_next::util::format::sample::Type::Planar),
+        };
+
+
         //let codec = ffmpeg_next::codec::encoder::find(ffmpeg_next::codec::Id::AAC).ok_or("AAC encoder not found").unwrap();
         let codec = audio_params.base_params.codec;
         let ctx = ffmpeg_next::codec::context::Context::new_with_codec(codec);
         let mut enc = ctx.encoder().audio().unwrap();
 
-        enc.set_rate(format.nSamplesPerSec as i32); //enc.set_rate(audio_params.base_params.rate);
+        enc.set_rate(audio_params.base_params.rate); //enc.set_rate(format.nSamplesPerSec as i32);
         enc.set_channel_layout(audio_params.channel_layout); //enc.set_channel_layout(ffmpeg_next::util::channel_layout::ChannelLayout::STEREO);
         enc.set_format(audio_params.format); //enc.set_format(ffmpeg_next::format::Sample::F32(ffmpeg_next::util::format::sample::Type::Planar));
         //enc.set_bit_rate(audio_params.base_params.bit_rate);//enc.set_bit_rate(128_000);
         //enc.set_max_bit_rate(audio_params.base_params.max_bit_rate);//enc.set_max_bit_rate(200_000);
-        enc.set_time_base((1, format.nSamplesPerSec as i32)); //enc.set_time_base((1, audio_params.base_params.rate));
+        enc.set_time_base((1, audio_params.base_params.rate)); //enc.set_time_base((1, format.nSamplesPerSec as i32));
         enc.set_flags(audio_params.base_params.flags); //enc.set_flags(Flags::GLOBAL_HEADER);
 
         let audio_encoder = enc.open_as(codec).unwrap();
 
+        let par = Parameters::from(&audio_encoder);
+
         let frame = ffmpeg_next::util::frame::audio::Audio::new(
             audio_encoder.format(),
-            1024,
+            AAC_FRAME_SIZE,
             audio_encoder.channel_layout(),
         );
         let mut empty_frame = ffmpeg_next::util::frame::audio::Audio::new(
             audio_encoder.format(),
-            1024,
+            AAC_FRAME_SIZE,
             audio_encoder.channel_layout(),
         );
-        Self::copy_into_frame(&mut empty_frame, vec![0u8; 1024 * format.nBlockAlign as usize]);
+        //let buf = vec![0u8; AAC_FRAME_SIZE * empty_frame.format().bytes() * empty_frame.channel_layout().channels() as usize];
+        let buf = vec![0u8; AAC_FRAME_SIZE * format.nBlockAlign as usize];
+        Self::copy_into_frame(&mut empty_frame, buf);
 
 
-        Self {
+        (Self {
             audio_encoder,
             ring_buffer,
 
@@ -114,7 +134,7 @@ impl<P: PacketRingBuffer> AudioCapturer<P> {
             frame,
             empty_frame,
             event
-        }
+        }, par)
     }
 
     fn copy_into_frame(frame: &mut ffmpeg_next::util::frame::audio::Audio, buffer: Vec<u8>) {
@@ -140,30 +160,32 @@ impl<P: PacketRingBuffer> AudioCapturer<P> {
         }
     }
 
-    fn flush_and_silence(&mut self, vec_to_be_flushed: &mut Vec<u8>, mut frames_of_silence: i64, start_pts: &mut i64) {
+    fn flush_and_silence(&mut self, vec_to_be_flushed: &mut VecDeque<u8>, mut frames_of_silence: i64, start_pts: &mut i64) {
         // flush
-        let mut buffer = vec![0; 1024 * self.format.nBlockAlign as usize];
-        assert!(buffer.len() > vec_to_be_flushed.len());
-        println!("vec_to_be_flushed.len(): {}", vec_to_be_flushed.len());
+        let mut buffer = vec![0; AAC_FRAME_SIZE * self.format.nBlockAlign as usize];
+        assert!(buffer.len() >= vec_to_be_flushed.len());
         let flushed_pts = (buffer.len() - vec_to_be_flushed.len()) / self.format.nBlockAlign as usize;
         assert_eq!(flushed_pts * self.format.nBlockAlign as usize, buffer.len() - vec_to_be_flushed.len());
-        buffer[..vec_to_be_flushed.len()].copy_from_slice(vec_to_be_flushed);
+
+        let (first, second) = vec_to_be_flushed.as_slices();
+        assert_eq!(first.len() + second.len(), vec_to_be_flushed.len());
+        buffer[..first.len()].copy_from_slice(first);
+        buffer[first.len()..vec_to_be_flushed.len()].copy_from_slice(second);
         frames_of_silence -= flushed_pts as i64;
+
         Self::copy_into_frame(&mut self.frame, buffer);
         self.frame.set_pts(Some(*start_pts));
-        Self::send_frame_and_receive_packets(&self.ring_buffer, &mut self.audio_encoder, &self.frame);
-        *start_pts += 1024;
+        Self::send_frame_and_receive_packets(&self.ring_buffer, &mut self.audio_encoder, &self.frame, AAC_FRAME_SIZE as i64);
+        *start_pts += AAC_FRAME_SIZE as i64;
 
         // empty frames
-        let whole_silent_frames = frames_of_silence / 1024;//frames_of_silence & !(1024-1); // frames_of_silence / 1024 * 1024;
+        let whole_silent_frames = frames_of_silence / AAC_FRAME_SIZE as i64;
 
-        println!("{}, {}", whole_silent_frames, frames_of_silence);
         for _ in 0..whole_silent_frames {
             self.empty_frame.set_pts(Some(*start_pts));
-            Self::send_frame_and_receive_packets(&self.ring_buffer, &mut self.audio_encoder, &self.empty_frame);
-            *start_pts += 1024;
+            Self::send_frame_and_receive_packets(&self.ring_buffer, &mut self.audio_encoder, &self.empty_frame, AAC_FRAME_SIZE as i64);
+            *start_pts += AAC_FRAME_SIZE as i64;
         }
-        println!("he done!");
     }
 }
 
@@ -172,7 +194,7 @@ impl<P: PacketRingBuffer> Recorder<P> for AudioCapturer<P> {
         thread::spawn(move || -> Result<(), IdkCustomErrorIGuess> {
             unsafe {
                 let mut pts_counter: i64 = 0;
-                let mut total_buffer = Vec::new();
+                let mut total_buffer = VecDeque::new();
 
                 let capture_client: IAudioCaptureClient = self.client.GetService()?;
 
@@ -201,9 +223,9 @@ impl<P: PacketRingBuffer> Recorder<P> for AudioCapturer<P> {
                     )?;
 
                     if packet_length > 0 {
-                        let new_pts = ((qpc_pos - start_time as u64) * 48000u64 / freq as u64) as i64;
+                        let new_pts = ((qpc_pos - start_time as u64) * self.format.nSamplesPerSec as u64 / freq as u64) as i64;
                         let diff = (new_pts - pts_counter).max(0);
-                        if diff >= 1024 {
+                        if diff >= AAC_FRAME_SIZE as _ {
                             println!("ADDED SILENCE!!!");
                             self.flush_and_silence(&mut total_buffer, diff, &mut pts_counter);
                         }
@@ -215,18 +237,20 @@ impl<P: PacketRingBuffer> Recorder<P> for AudioCapturer<P> {
                         );
 
                         assert_eq!(buffer.len() % 8, 0);
-                        total_buffer.extend_from_slice(buffer);
+                        //total_buffer.extend_from_slice(buffer);
+                        total_buffer.extend(buffer);
 
                         capture_client.ReleaseBuffer(packet_length)?;
                     }
 
-                    while total_buffer.len() >= 1024 * self.format.nBlockAlign as usize {
-                        let buffer: Vec<u8> = total_buffer.drain(..1024 * self.format.nBlockAlign as usize).collect();
-                        let sample_frames = 1024;//packet_length as usize; //buffer.len() / (*format).nBlockAlign as usize;
+                    while total_buffer.len() >= AAC_FRAME_SIZE * self.format.nBlockAlign as usize {
+                        //let buffer: Vec<u8> = total_buffer.drain(..1024 * self.format.nBlockAlign as usize).collect();
+                        let buffer: Vec<u8> = total_buffer.drain(..AAC_FRAME_SIZE * self.format.nBlockAlign as usize).collect();
+                        let sample_frames = AAC_FRAME_SIZE;//packet_length as usize; //buffer.len() / (*format).nBlockAlign as usize;
 
                         Self::copy_into_frame(&mut self.frame, buffer);
                         self.frame.set_pts(Some(pts_counter));
-                        Self::send_frame_and_receive_packets(&self.ring_buffer, &mut self.audio_encoder, &self.frame);
+                        Self::send_frame_and_receive_packets(&self.ring_buffer, &mut self.audio_encoder, &self.frame, AAC_FRAME_SIZE as i64);
 
                         pts_counter += sample_frames as i64;
                     }
@@ -237,7 +261,7 @@ impl<P: PacketRingBuffer> Recorder<P> for AudioCapturer<P> {
     }
 }
 
-pub struct MaybeSafeHANDLE(HANDLE);
+struct MaybeSafeHANDLE(HANDLE);
 
 unsafe impl Send for MaybeSafeHANDLE {}
 unsafe impl Sync for MaybeSafeHANDLE {}

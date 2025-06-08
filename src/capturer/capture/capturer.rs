@@ -1,69 +1,56 @@
-use crate::capturer::capture::audio_capturer::AudioCapturer;
-use ffmpeg_next::codec::Flags;
+use std::sync::{Arc, mpsc, Mutex};
+use std::sync::mpsc::Receiver;
+
 use ffmpeg_next::Packet;
 use rdev::Key;
-use std::sync::mpsc::Receiver;
-use std::sync::{mpsc, Arc, Mutex};
 
-use crate::capturer::capture::recorder::{AudioParams, BaseParams, RecorderCarrier, VideoParams};
-use crate::capturer::capture::video_capturer::VideoCapturer;
+use crate::capturer::capture::audio_per_process::_AudioPerProcess;
+use crate::capturer::capture::main_audio_capturer::AudioCapturer;
+use crate::capturer::capture::main_video_capturer::VideoCapturer;
+use crate::capturer::capture::recorder::RecorderCarrier;
 use crate::capturer::clipping::key_listener::KeyListener;
 use crate::capturer::clipping::saver::Saver;
 use crate::capturer::ring_buffer::{KeyFrameStartPacketWrapper, RingBuffer};
 
-pub struct Capturer {
-    video_capturers: Vec<RecorderCarrier<RingBuffer<KeyFrameStartPacketWrapper>, VideoCapturer<RingBuffer<KeyFrameStartPacketWrapper>>>>,
-    audio_capturers: Vec<RecorderCarrier<RingBuffer<Packet>, AudioCapturer<RingBuffer<Packet>>>>,
+pub struct MainCapturer {
+    video_capturer: RecorderCarrier<RingBuffer<KeyFrameStartPacketWrapper>, VideoCapturer<RingBuffer<KeyFrameStartPacketWrapper>>>,
+    //audio_capturer: RecorderCarrier<RingBuffer<Packet>, AudioCapturer<RingBuffer<Packet>>>,
+    audio_capturer: RecorderCarrier<RingBuffer<Packet>, _AudioPerProcess<RingBuffer<Packet>>>,
     saver: Saver,
 
     key_listener: KeyListener,
     receiver: Receiver<()>,
 }
 
-impl Capturer {
+impl MainCapturer {
     pub fn new() -> Self {
+        let one_vid_buf = Arc::new(Mutex::new(RingBuffer::new(30 * 10)));
+        let one_aud_buf = Arc::new(Mutex::new(RingBuffer::new(48_000 * 10)));
+        let (vid_cap, parv) = VideoCapturer::new(one_vid_buf.clone(), 0).unwrap();
+        //let (aud_cap, para) = AudioCapturer::new(one_aud_buf.clone());
 
-        let video_params = VideoParams{
-            base_params: BaseParams {
-                //codec: ffmpeg_next::codec::encoder::find_by_name("hevc_amf").ok_or(ffmpeg_next::Error::EncoderNotFound).unwrap(),
-                codec: ffmpeg_next::codec::encoder::find_by_name("hevc_qsv").ok_or(ffmpeg_next::Error::EncoderNotFound).unwrap(),
-                bit_rate: 8_000_000,
-                max_bit_rate: 10_000_000,
-                flags: Flags::GLOBAL_HEADER,
-                rate: 30, //fps
-            },
-            out_width: 1500,
-            out_height: 1000,
-            //format: ffmpeg_next::format::Pixel::D3D11,
-            format: ffmpeg_next::format::Pixel::NV12,
-        };
-        let audio_params = AudioParams{
-            base_params: BaseParams {
-                codec: ffmpeg_next::codec::encoder::find(ffmpeg_next::codec::Id::AAC).ok_or(ffmpeg_next::Error::EncoderNotFound).unwrap(),
-                bit_rate: 128_000,
-                max_bit_rate: 150_000,
-                flags: Flags::GLOBAL_HEADER,
-                rate: 48_000,// TODO has to always match windows!!! 48_000 is just temporary
-            },
-            channel_layout: ffmpeg_next::util::channel_layout::ChannelLayout::STEREO,
-            format: ffmpeg_next::format::Sample::F32(ffmpeg_next::util::format::sample::Type::Planar),
-        };
+        let mut input = String::new();
+        std::io::stdin().read_line(&mut input).expect("Failed to read line");
 
-        let one_vid_buf = Arc::new(Mutex::new(RingBuffer::new(1000)));
-        let one_aud_buf = Arc::new(Mutex::new(RingBuffer::new(1000)));
-        let vid_cap = VideoCapturer::new(one_vid_buf.clone(), &video_params);
-        let aud_cap = AudioCapturer::new(one_aud_buf.clone(), &audio_params);
+        let trimmed = input.trim();
+        match trimmed.parse::<u32>() {
+            Ok(num) => println!("You entered: {}", num),
+            Err(_) => println!("Invalid number!"),
+        }
+        let num = trimmed.parse::<u32>().unwrap();
+
+        let (aud_cap, para) = _AudioPerProcess::new(num, true, one_aud_buf.clone()).unwrap();
         let one_vid = RecorderCarrier::new(one_vid_buf.clone(), vid_cap);
         let one_aud = RecorderCarrier::new(one_aud_buf.clone(), aud_cap);
-        let saver = Saver::new(&video_params, &audio_params, "out", "Chat Clip That", ".mp4");
+        let saver = Saver::new(parv, para, "out", "Chat Clip That", ".mp4");
 
         let (sender, receiver) = mpsc::channel::<()>();
         let mut key_listener = KeyListener::new();
-        key_listener.register_shortcut(&[Key::Alt, Key::KeyN], move || sender.send(()).unwrap());
+        key_listener.register_shortcut(&[Key::Alt, Key::KeyM], move || sender.send(()).unwrap());
 
         Self {
-            video_capturers: vec![one_vid],
-            audio_capturers: vec![one_aud],
+            video_capturer: one_vid,
+            audio_capturer: one_aud,
             saver,
             key_listener,
             receiver,
@@ -71,12 +58,12 @@ impl Capturer {
     }
 
     pub fn start_capturing(mut self) {
-        self.video_capturers[0].start_capturing().unwrap();
-        self.audio_capturers[0].start_capturing().unwrap();
+        self.video_capturer.start_capturing().unwrap();
+        self.audio_capturer.start_capturing().unwrap();
         self.key_listener.start();
 
         while self.receiver.recv().is_ok() {
-            self.saver.standard_save(&self.video_capturers[0], &self.audio_capturers[0], None).unwrap()
+            self.saver.standard_save_to_disc(&self.video_capturer, &self.audio_capturer, None).unwrap()
         }
     }
 }

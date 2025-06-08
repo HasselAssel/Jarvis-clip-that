@@ -3,12 +3,13 @@ use ffmpeg_next::Packet;
 
 pub trait PacketRingBuffer: Sync + Send {
     fn insert(&mut self, packet: Packet);
-    fn copy_out(&self, min_requested_frames: Option<i32>) -> Vec<Packet>;
+    fn copy_out(&self, min_requested_frames: Option<i64>) -> Vec<Packet>;
 }
 
 trait PacketHandler: Sized + Sync + Send{
     fn insert(container: &mut VecDeque<Self>, packet: Packet);
     fn get_duration(&self) -> i64;
+    fn get_contents(&self) -> &[Packet];
 }
 
 pub struct RingBuffer<T: PacketHandler> {
@@ -48,8 +49,24 @@ impl<T: PacketHandler> PacketRingBuffer for RingBuffer<T> {
         }
     }
 
-    fn copy_out(&self, min_requested_frames: Option<i32>) -> Vec<Packet> {
-        todo!()
+    fn copy_out(&self, min_requested_frames: Option<i64>) -> Vec<Packet> {
+        if let Some(min_requested_frames) = min_requested_frames {
+            let mut total = 0;
+            let mut result = Vec::new();
+
+            for item in self.buffer.iter().rev() {
+                total += item.get_duration();
+                result.extend_from_slice(item.get_contents()); // or clone just the metadata if needed
+                if total >= min_requested_frames {
+                    break;
+                }
+            }
+
+            result.reverse(); // So the order is preserved (oldest first)
+            result
+        } else {
+            self.buffer.iter().flat_map(|item| item.get_contents()).cloned().collect()
+        }
     }
 }
 
@@ -61,11 +78,15 @@ impl PacketHandler for Packet {
     fn get_duration(&self) -> i64 {
         self.duration()
     }
+
+    fn get_contents(&self) -> &[Packet] {
+        std::slice::from_ref(self)
+    }
 }
 
 impl PacketHandler for KeyFrameStartPacketWrapper {
     fn insert(container: &mut VecDeque<Self>, packet: Packet) {
-        let needs_new = container.back().map_or(true, |item| item.buffer.last().unwrap().is_key());
+        let needs_new = container.back().map_or(true, |item| {item.buffer.last().unwrap().is_key()});
 
         if needs_new {
             container.push_back(KeyFrameStartPacketWrapper::default());
@@ -78,5 +99,9 @@ impl PacketHandler for KeyFrameStartPacketWrapper {
 
     fn get_duration(&self) -> i64 {
         self.buffer.iter().map(|item| item.duration()).sum()
+    }
+
+    fn get_contents(&self) -> &[Packet] {
+        self.buffer.as_slice()
     }
 }

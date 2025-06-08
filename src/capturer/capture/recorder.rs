@@ -28,13 +28,17 @@ impl<P: PacketRingBuffer, R: Recorder<P>> RecorderCarrier<P, R> {
 
 pub trait Recorder<R: PacketRingBuffer> {
     fn start_capturing(self) -> JoinHandle<Result<(), IdkCustomErrorIGuess>>;
-    fn send_frame_and_receive_packets(ring_buffer: &Arc<Mutex<R>>, encoder: &mut ffmpeg_next::codec::encoder::Encoder, frame: &ffmpeg_next::Frame) {
+    fn send_frame_and_receive_packets(ring_buffer: &Arc<Mutex<R>>, encoder: &mut codec::encoder::Encoder, frame: &ffmpeg_next::Frame, mut duration: i64) {
+        let pts = frame.pts().unwrap();
         encoder.send_frame(frame).unwrap();
 
         let mut packet = Packet::empty();
         let mut ring_buffer = ring_buffer.lock().unwrap();
         while encoder.receive_packet(&mut packet).is_ok() {
-            ring_buffer.insert(packet.clone());
+            let mut packet_clone = packet.clone();
+            packet_clone.set_duration(duration);
+            ring_buffer.insert(packet_clone);
+            duration = 0;
         }
         drop(ring_buffer);
     }
