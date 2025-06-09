@@ -4,7 +4,7 @@ use std::sync::mpsc::Receiver;
 use ffmpeg_next::Packet;
 use rdev::Key;
 
-use crate::capturer::capture::audio_per_process::_AudioPerProcess;
+use crate::capturer::capture::audio_per_process::AudioPerProcess;
 use crate::capturer::capture::main_audio_capturer::AudioCapturer;
 use crate::capturer::capture::main_video_capturer::VideoCapturer;
 use crate::capturer::capture::recorder::RecorderCarrier;
@@ -15,7 +15,7 @@ use crate::capturer::ring_buffer::{KeyFrameStartPacketWrapper, RingBuffer};
 pub struct MainCapturer {
     video_capturer: RecorderCarrier<RingBuffer<KeyFrameStartPacketWrapper>, VideoCapturer<RingBuffer<KeyFrameStartPacketWrapper>>>,
     //audio_capturer: RecorderCarrier<RingBuffer<Packet>, AudioCapturer<RingBuffer<Packet>>>,
-    audio_capturer: RecorderCarrier<RingBuffer<Packet>, _AudioPerProcess<RingBuffer<Packet>>>,
+    audio_capturer: RecorderCarrier<RingBuffer<Packet>, AudioPerProcess<RingBuffer<Packet>>>,
     saver: Saver,
 
     key_listener: KeyListener,
@@ -39,7 +39,7 @@ impl MainCapturer {
         }
         let num = trimmed.parse::<u32>().unwrap();
 
-        let (aud_cap, para) = _AudioPerProcess::new(num, true, one_aud_buf.clone()).unwrap();
+        let (aud_cap, para) = AudioPerProcess::new(num, true, one_aud_buf.clone()).unwrap();
         let one_vid = RecorderCarrier::new(one_vid_buf.clone(), vid_cap);
         let one_aud = RecorderCarrier::new(one_aud_buf.clone(), aud_cap);
         let saver = Saver::new(parv, para, "out", "Chat Clip That", ".mp4");

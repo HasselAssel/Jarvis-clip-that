@@ -15,7 +15,7 @@ use crate::com::ComObj;
 const AAC_FRAME_SIZE: usize = 1024;
 const SAMPLE_RATE: usize = 48_000;
 
-pub struct _AudioPerProcess<P: PacketRingBuffer + 'static> {
+pub struct AudioPerProcess<P: PacketRingBuffer + 'static> {
     audio_encoder: Audio,
     ring_buffer: Arc<Mutex<P>>,
 
@@ -27,7 +27,7 @@ pub struct _AudioPerProcess<P: PacketRingBuffer + 'static> {
     event: MaybeSafeHANDLE,
 }
 
-impl<P: PacketRingBuffer + 'static> _AudioPerProcess<P> {
+impl<P: PacketRingBuffer> AudioPerProcess<P> {
     pub fn new(p_id: u32, include_tree: bool, ring_buffer: Arc<Mutex<P>>) -> Result<(Self, Parameters), WasapiError> {
         unsafe {
             windows::Win32::System::Com::CoInitializeEx(None, windows::Win32::System::Com::COINIT_MULTITHREADED).unwrap();
@@ -97,7 +97,7 @@ impl<P: PacketRingBuffer + 'static> _AudioPerProcess<P> {
     }
 }
 
-impl <P: PacketRingBuffer> Recorder<P> for _AudioPerProcess<P> {
+impl <P: PacketRingBuffer> Recorder<P> for AudioPerProcess<P> {
     fn start_capturing(mut self) -> JoinHandle<Result<(), IdkCustomErrorIGuess>> {
         thread::spawn(move || -> Result<(), IdkCustomErrorIGuess> {
             let capture_client = self.client.get_audiocaptureclient()?;
@@ -117,7 +117,6 @@ impl <P: PacketRingBuffer> Recorder<P> for _AudioPerProcess<P> {
 
             loop {
                 self.event.wait_for_event(4294967295).unwrap();
-                println!("EVENT!");
 
                 unsafe { windows::Win32::System::Performance::QueryPerformanceCounter(&mut now_time_buf)?; }
                 let new_pts = (now_time_buf - start_time) * SAMPLE_RATE as i64 / freq;
@@ -146,7 +145,7 @@ impl <P: PacketRingBuffer> Recorder<P> for _AudioPerProcess<P> {
     }
 }
 
-impl<P: PacketRingBuffer> _AudioPerProcess<P> {
+impl<P: PacketRingBuffer> AudioPerProcess<P> {
     fn flush_and_silence(&mut self, vec_to_be_flushed: &mut VecDeque<u8>, mut frames_of_silence: i64, start_pts: &mut i64) {
         // flush
         //let mut buffer = vec![0; self.frame.format().bytes()];
