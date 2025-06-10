@@ -56,14 +56,14 @@ impl<T: PacketHandler> PacketRingBuffer for RingBuffer<T> {
 
             for item in self.buffer.iter().rev() {
                 total += item.get_duration();
-                result.extend_from_slice(item.get_contents()); // or clone just the metadata if needed
+                result.push(item.get_contents());
                 if total >= min_requested_frames {
                     break;
                 }
             }
 
             result.reverse(); // So the order is preserved (oldest first)
-            result
+            result.into_iter().flatten().cloned().collect::<Vec<Packet>>()
         } else {
             self.buffer.iter().flat_map(|item| item.get_contents()).cloned().collect()
         }
