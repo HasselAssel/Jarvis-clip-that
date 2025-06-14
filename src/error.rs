@@ -1,8 +1,14 @@
 #[derive(Debug)]
+pub enum Error {
+    NotYetImplemented
+}
+
+#[derive(Debug)]
 pub enum CustomError {
     FFMPEG(ffmpeg_next::Error),
     WINDOWS(windows::core::Error),
     WASAPI(wasapi::WasapiError),
+    CUSTOM(Error)
 }
 
 impl From<ffmpeg_next::Error> for CustomError {

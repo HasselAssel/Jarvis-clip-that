@@ -9,7 +9,7 @@ use crate::types::{Packet, Result};
 pub trait Recorder<PRB: PacketRingBuffer> {
     fn start_capturing(self) -> JoinHandle<Result<()>>;
     fn send_frame_and_receive_packets(ring_buffer: &Arc<Mutex<PRB>>, encoder: &mut codec::encoder::Encoder, frame: &ffmpeg_next::Frame, mut duration: i64) -> Result<()>{
-        encoder.send_frame(frame).unwrap();
+        encoder.send_frame(frame)?;
 
         let mut packet = Packet::empty();
         let mut ring_buffer = ring_buffer.lock().unwrap();
@@ -20,5 +20,6 @@ pub trait Recorder<PRB: PacketRingBuffer> {
             duration = 0;
         }
         drop(ring_buffer);
+        Ok(())
     }
 }
