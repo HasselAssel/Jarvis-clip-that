@@ -1,6 +1,8 @@
 #[derive(Debug)]
 pub enum Error {
-    NotYetImplemented
+    NotYetImplemented,
+
+    AvFrameCreationFailed
 }
 
 #[derive(Debug)]

@@ -1,1 +1,1 @@
-mod desktop_recorder;
+pub mod desktop_recorder;

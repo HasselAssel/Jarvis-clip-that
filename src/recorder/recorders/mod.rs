@@ -1,3 +1,5 @@
-mod video;
-mod audio;
-mod encoders;
+pub mod video;
+pub mod audio;
+pub mod encoders;
+pub mod d3d11;
+pub mod frame;

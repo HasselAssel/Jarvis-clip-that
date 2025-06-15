@@ -1,6 +1,6 @@
 #[derive(Clone)]
 pub struct BaseParams {
-    pub codec: ffmpeg_next::codec::codec::Codec,
+    //pub codec: ffmpeg_next::codec::codec::Codec,
     pub bit_rate: usize,
     pub max_bit_rate: usize,
     pub flags: ffmpeg_next::codec::flag::Flags,
