@@ -1,3 +1,4 @@
+use std::any::Any;
 use std::ptr::null_mut;
 use std::sync::{Arc, Mutex};
 use std::thread;
@@ -7,26 +8,28 @@ use std::time::{Duration, Instant};
 use ffmpeg_next::encoder::video::Encoder;
 use ffmpeg_next::sys::{av_buffer_create, AVFrame};
 use windows::Win32::Graphics::Direct3D11::{ID3D11Device, ID3D11DeviceContext, ID3D11Texture2D};
-use windows::Win32::Graphics::Dxgi::{DXGI_OUTDUPL_FRAME_INFO, IDXGIOutputDuplication, IDXGIResource};
+use windows::Win32::Graphics::Dxgi::{DXGI_OUTDUPL_DESC, DXGI_OUTDUPL_FRAME_INFO, IDXGIOutputDuplication, IDXGIResource};
 use windows_core::Interface;
 
 use crate::recorder::parameters::VideoParams;
+use crate::recorder::recorders::d3d11::convert_rgba_to_nv12;
 use crate::recorder::traits::Recorder;
 use crate::ring_buffer::traits::PacketRingBuffer;
 use crate::types::Result;
+use crate::wrappers::MaybeSafeFFIPtrWrapper;
 
-pub struct VideoCapturer<P: PacketRingBuffer> {
-    ring_buffer: Arc<Mutex<P>>,
+pub struct VideoCapturer<PRB: PacketRingBuffer + 'static> {
+    ring_buffer: Arc<Mutex<PRB>>,
     video_encoder: Encoder,
     video_params: VideoParams,
     device: ID3D11Device,
     context: ID3D11DeviceContext,
     duplication: IDXGIOutputDuplication,
-    av_frame: *mut AVFrame,
+    av_frame: MaybeSafeFFIPtrWrapper<AVFrame>,
 }
 
-impl<P: PacketRingBuffer> VideoCapturer<P> {
-    pub fn new(ring_buffer: Arc<Mutex<P>>, video_encoder: Encoder, video_params: VideoParams, (device, context, duplication): (ID3D11Device, ID3D11DeviceContext, IDXGIOutputDuplication), av_frame: *mut AVFrame) -> Self {
+impl<PRB: PacketRingBuffer> VideoCapturer<PRB> {
+    pub fn new(ring_buffer: Arc<Mutex<PRB>>, video_encoder: Encoder, video_params: VideoParams, (device, context, duplication): (ID3D11Device, ID3D11DeviceContext, IDXGIOutputDuplication), av_frame: *mut AVFrame) -> Self {
         Self {
             ring_buffer,
             video_encoder,
@@ -34,26 +37,30 @@ impl<P: PacketRingBuffer> VideoCapturer<P> {
             device,
             context,
             duplication,
-            av_frame,
+            av_frame: MaybeSafeFFIPtrWrapper(av_frame),
         }
     }
 }
 
-impl<P: PacketRingBuffer> Recorder<P> for VideoCapturer<P> {
-    fn start_capturing(mut self) -> JoinHandle<Result<()>> {
+impl<PRB: PacketRingBuffer> Recorder<PRB> for VideoCapturer<PRB> {
+    fn start_capturing(mut self: Box<Self>) -> JoinHandle<Result<()>> {
         thread::spawn(move || -> Result<()> {
             let mut resource: Option<IDXGIResource>;
             let mut hr: windows::core::Result<()>;
             let mut frame_info: DXGI_OUTDUPL_FRAME_INFO = DXGI_OUTDUPL_FRAME_INFO::default();
             let mut tex: ID3D11Texture2D;
             let mut nv12_tex: ID3D11Texture2D;
-            let mut av_frame: *mut AVFrame = null_mut();
-            let mut frame: ffmpeg_next::frame::Video = ffmpeg_next::frame::Video::new(ffmpeg_next::format::Pixel::NV12, self.video_params.out_width, self.video_params.out_height);
+            //let mut frame: ffmpeg_next::frame::Video = ffmpeg_next::frame::Video::new(ffmpeg_next::format::Pixel::NV12, self.video_params.out_width, self.video_params.out_height);
+            let mut frame = unsafe { ffmpeg_next::frame::video::Video::wrap(*self.av_frame) };
 
             let frame_duration: Duration = Duration::from_secs_f64(1.0f64 / (self.video_params.base_params.rate as f64));
             let mut elapsed: Duration;
             let mut expected_elapsed: Duration;
             let mut start_time: Instant;
+
+            let out_desc: DXGI_OUTDUPL_DESC = unsafe { self.duplication.GetDesc() };
+            let in_width = out_desc.ModeDesc.Width;
+            let in_height = out_desc.ModeDesc.Height;
 
             let mut packet_sent_frames_counter = 0;
             let mut total_frames_counter = 0;
@@ -86,7 +93,7 @@ impl<P: PacketRingBuffer> Recorder<P> for VideoCapturer<P> {
                                 tex = dxgi_resource.cast().unwrap();
 
                                 nv12_tex = unsafe {
-                                    self.convert_rgba_to_nv12(&tex).unwrap()
+                                    convert_rgba_to_nv12(&self.device, &self.context, &tex, in_width, in_height, self.video_params.out_width, self.video_params.out_height).unwrap()
                                 };
 
                                 // TRUST THE PROCESS
@@ -94,14 +101,14 @@ impl<P: PacketRingBuffer> Recorder<P> for VideoCapturer<P> {
                                     av_buffer_create(
                                         nv12_tex.as_raw() as _,
                                         size_of::<*mut ID3D11Texture2D>(),
-                                        Some(Self::buffer_free),
+                                        None,//Some(Self::buffer_free),
                                         null_mut(),
                                         0,
                                     )
                                 };
                                 unsafe {
-                                    (*av_frame).data[0] = nv12_tex.as_raw() as _;
-                                    (*av_frame).buf[0] = texture_buffer;
+                                    (**self.av_frame).data[0] = nv12_tex.as_raw() as _;
+                                    (**self.av_frame).buf[0] = texture_buffer;
                                 }
                             };
                             Ok(())
@@ -115,9 +122,9 @@ impl<P: PacketRingBuffer> Recorder<P> for VideoCapturer<P> {
                     // TODO: Fix First Frame always being Green (for some reason the first duplication.AcquireNextFrame call generates no IDXGIResource)
 
 
-                    if let Ok(_) = exists_new_frame {
-                        frame = unsafe { ffmpeg_next::frame::Video::wrap(av_frame) };
-                    }
+                    /*if let Ok(_) = exists_new_frame {
+                        frame = unsafe { ffmpeg_next::frame::Video::wrap(*self.av_frame) };
+                    }*/
                     total_frames_counter += 1;
                     packet_sent_frames_counter += 1;
 

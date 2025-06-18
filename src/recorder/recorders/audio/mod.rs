@@ -1,1 +1,1 @@
-mod default_audio_recorder;
+pub mod desktop_recorder;

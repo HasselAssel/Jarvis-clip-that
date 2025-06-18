@@ -1,8 +1,9 @@
 #[derive(Debug)]
 pub enum Error {
     NotYetImplemented,
+    NonExistentParameterCombination,
 
-    AvFrameCreationFailed
+    Unknown,
 }
 
 #[derive(Debug)]
@@ -10,6 +11,8 @@ pub enum CustomError {
     FFMPEG(ffmpeg_next::Error),
     WINDOWS(windows::core::Error),
     WASAPI(wasapi::WasapiError),
+    IO(std::io::Error),
+
     CUSTOM(Error)
 }
 
@@ -28,5 +31,18 @@ impl From<windows::core::Error> for CustomError {
 impl From<wasapi::WasapiError> for CustomError {
     fn from(value: wasapi::WasapiError) -> Self {
         CustomError::WASAPI(value)
+    }
+}
+
+impl From<std::io::Error> for CustomError {
+    fn from(value: std::io::Error) -> Self {
+        CustomError::IO(value)
+    }
+}
+
+
+impl From<Error> for CustomError {
+    fn from(value: Error) -> Self {
+        CustomError::CUSTOM(value)
     }
 }

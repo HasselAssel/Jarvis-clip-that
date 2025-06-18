@@ -9,16 +9,6 @@ pub struct RingBuffer<T: PacketHandler> {
     min_frame_amount: i64,
 }
 
-impl<T: PacketHandler> RingBuffer<T> {
-    pub fn new(min_frame_amount: u32) -> Self {
-        Self {
-            frame_counter: 0,
-            buffer: VecDeque::new(),
-            min_frame_amount: min_frame_amount as i64,
-        }
-    }
-}
-
 impl<T: PacketHandler> PacketRingBuffer for RingBuffer<T> {
     fn insert(&mut self, packet: Packet) {
         self.frame_counter += packet.duration();
@@ -52,6 +42,14 @@ impl<T: PacketHandler> PacketRingBuffer for RingBuffer<T> {
             result.into_iter().flatten().cloned().collect::<Vec<Packet>>()
         } else {
             self.buffer.iter().flat_map(|item| item.get_contents()).cloned().collect()
+        }
+    }
+
+    fn new(min_frame_amount: u32) -> Self {
+        Self {
+            frame_counter: 0,
+            buffer: VecDeque::new(),
+            min_frame_amount: min_frame_amount as i64,
         }
     }
 }

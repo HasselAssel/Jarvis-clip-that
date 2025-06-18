@@ -1,11 +1,14 @@
 use std::mem::ManuallyDrop;
+
 use ffmpeg_next::ffi::{av_buffer_unref, av_hwdevice_ctx_alloc, av_hwdevice_ctx_init, av_hwframe_ctx_init, AVBufferRef, AVHWDeviceType};
 use windows::Win32::Foundation::{HMODULE, TRUE};
-use windows::Win32::Graphics::Direct3D11::{D3D11_BIND_RENDER_TARGET, D3D11_BIND_SHADER_RESOURCE, D3D11_CREATE_DEVICE_BGRA_SUPPORT, D3D11_SDK_VERSION, D3D11_TEX2D_VPIV, D3D11_TEX2D_VPOV, D3D11_TEXTURE2D_DESC, D3D11_USAGE_DEFAULT, D3D11_VIDEO_FRAME_FORMAT_PROGRESSIVE, D3D11_VIDEO_PROCESSOR_CONTENT_DESC, D3D11_VIDEO_PROCESSOR_INPUT_VIEW_DESC, D3D11_VIDEO_PROCESSOR_INPUT_VIEW_DESC_0, D3D11_VIDEO_PROCESSOR_OUTPUT_VIEW_DESC, D3D11_VIDEO_PROCESSOR_OUTPUT_VIEW_DESC_0, D3D11_VIDEO_PROCESSOR_STREAM, D3D11_VPIV_DIMENSION_TEXTURE2D, D3D11_VPOV_DIMENSION_TEXTURE2D, D3D11CreateDevice, ID3D11Device, ID3D11DeviceContext, ID3D11Texture2D, ID3D11VideoContext, ID3D11VideoDevice, ID3D11VideoProcessor, ID3D11VideoProcessorEnumerator, ID3D11VideoProcessorInputView, ID3D11VideoProcessorOutputView};
 use windows::Win32::Graphics::Direct3D::{D3D_DRIVER_TYPE_HARDWARE, D3D_FEATURE_LEVEL_10_0, D3D_FEATURE_LEVEL_11_0};
-use windows::Win32::Graphics::Dxgi::{DXGI_OUTDUPL_DESC, IDXGIAdapter, IDXGIDevice, IDXGIOutput, IDXGIOutput1, IDXGIOutputDuplication};
+use windows::Win32::Graphics::Direct3D11::{D3D11_BIND_RENDER_TARGET, D3D11_BIND_SHADER_RESOURCE, D3D11_CREATE_DEVICE_BGRA_SUPPORT, D3D11_SDK_VERSION, D3D11_TEX2D_VPIV, D3D11_TEX2D_VPOV, D3D11_TEXTURE2D_DESC, D3D11_USAGE_DEFAULT, D3D11_VIDEO_FRAME_FORMAT_PROGRESSIVE, D3D11_VIDEO_PROCESSOR_CONTENT_DESC, D3D11_VIDEO_PROCESSOR_INPUT_VIEW_DESC, D3D11_VIDEO_PROCESSOR_INPUT_VIEW_DESC_0, D3D11_VIDEO_PROCESSOR_OUTPUT_VIEW_DESC, D3D11_VIDEO_PROCESSOR_OUTPUT_VIEW_DESC_0, D3D11_VIDEO_PROCESSOR_STREAM, D3D11_VPIV_DIMENSION_TEXTURE2D, D3D11_VPOV_DIMENSION_TEXTURE2D, D3D11CreateDevice, ID3D11Device, ID3D11DeviceContext, ID3D11Texture2D, ID3D11VideoContext, ID3D11VideoDevice, ID3D11VideoProcessor, ID3D11VideoProcessorEnumerator, ID3D11VideoProcessorInputView, ID3D11VideoProcessorOutputView};
+use windows::Win32::Graphics::Dxgi::{IDXGIAdapter, IDXGIDevice, IDXGIOutput, IDXGIOutput1, IDXGIOutputDuplication};
 use windows::Win32::Graphics::Dxgi::Common::{DXGI_FORMAT_B8G8R8A8_UNORM, DXGI_FORMAT_NV12, DXGI_SAMPLE_DESC};
 use windows_core::Interface;
+use crate::error::Error::Unknown;
+
 use crate::recorder::parameters::VideoParams;
 use crate::types::Result;
 
@@ -25,13 +28,12 @@ pub fn create_id3d11device(monitor: u32) -> Result<(ID3D11Device, ID3D11DeviceCo
             Some(&mut context),
         )?;
     }
-    let device: ID3D11Device = device?;
-    let context: ID3D11DeviceContext = context?;
+    let device: ID3D11Device = device.ok_or(Unknown)?;
+    let context: ID3D11DeviceContext = context.ok_or(Unknown)?;
 
     let adapter: IDXGIAdapter;
     let output: IDXGIOutput;
     let duplication: IDXGIOutputDuplication;
-    let out_desc: DXGI_OUTDUPL_DESC;
 
     let dxgi_device: IDXGIDevice = device.cast()?;
     unsafe {
@@ -42,7 +44,6 @@ pub fn create_id3d11device(monitor: u32) -> Result<(ID3D11Device, ID3D11DeviceCo
     let output1: IDXGIOutput1 = output.cast()?;
     unsafe {
         duplication = output1.DuplicateOutput(&device)?;
-        out_desc = duplication.GetDesc();
     }
     Ok((device, context, duplication))
 }
@@ -94,7 +95,7 @@ pub fn get_hw_device_and_frame_cxt(device: &ID3D11Device, video_params: &VideoPa
     (hw_device_ctx, hw_frame_ctx)
 }
 
-pub unsafe fn convert_rgba_to_nv12(device: &ID3D11Device, context: &ID3D11DeviceContext, tex_rgba: &ID3D11Texture2D, in_width: u32, in_height: u32, out_width: u32, out_height: u32) -> windows::core::Result<ID3D11Texture2D> {
+pub unsafe fn convert_rgba_to_nv12(device: &ID3D11Device, context: &ID3D11DeviceContext, tex_rgba: &ID3D11Texture2D, in_width: u32, in_height: u32, out_width: u32, out_height: u32) -> Result<ID3D11Texture2D> {
     // 1) QI for ID3D11VideoDevice
     let video_dev: ID3D11VideoDevice = device.cast().unwrap();
     let video_ctx: ID3D11VideoContext = context.cast().unwrap();

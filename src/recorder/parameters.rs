@@ -22,5 +22,6 @@ pub struct AudioParams {
 
     pub channel_layout: ffmpeg_next::ChannelLayout,
     pub format: ffmpeg_next::util::format::sample::Sample,
-
 }
+
+unsafe impl Send for AudioParams {}

@@ -1,23 +1,19 @@
-use std::ptr::null_mut;
 use ffmpeg_next::codec::encoder::find_by_name;
-use ffmpeg_next::encoder::{video, audio};
-use ffmpeg_next::ffi::{av_buffer_unref, av_hwdevice_ctx_alloc, av_hwdevice_ctx_init, av_hwframe_ctx_init, AVHWDeviceType};
+use ffmpeg_next::encoder::{audio, find, video};
 use ffmpeg_next::sys::av_buffer_ref;
 use ffmpeg_next::sys::AVBufferRef;
-use windows::Win32::Foundation::HMODULE;
-use windows::Win32::Graphics::Direct3D11::{D3D11_CREATE_DEVICE_BGRA_SUPPORT, D3D11_SDK_VERSION, D3D11CreateDevice, ID3D11Device, ID3D11DeviceContext};
-use windows::Win32::Graphics::Direct3D::{D3D_DRIVER_TYPE_HARDWARE, D3D_FEATURE_LEVEL_10_0, D3D_FEATURE_LEVEL_11_0};
-use windows::Win32::Graphics::Dxgi::{DXGI_OUTDUPL_DESC, IDXGIAdapter, IDXGIDevice, IDXGIOutput, IDXGIOutput1, IDXGIOutputDuplication};
-use windows_core::Interface;
 
+use crate::error::Error;
 use crate::recorder::parameters::{AudioParams, VideoParams};
 use crate::types::Result;
-use crate::error::Error;
-use crate::recorder::recorders::d3d11::get_hw_device_and_frame_cxt;
 
-pub enum VideoFrameType {
+
+pub enum VideoFormatType {
+    D3D11 { monitor_nr: u32 },
+}
+
+pub enum VideoFormatTypeData {
     D3D11 { hw_device_ctx: *mut AVBufferRef, hw_frame_ctx: *mut AVBufferRef },
-    Test,
 }
 
 pub enum VideoEncoderType {
@@ -25,13 +21,24 @@ pub enum VideoEncoderType {
     QsvOderSo,
 }
 
-pub enum AudioFrameType {
+
+pub enum AudioFormatType {
+    WasapiSystem,
+    WasapiClient,
 }
 
-pub enum AudioEncoderType {
+pub enum AudioFormatTypeData {
+    WasapiSystem,
+    WasapiClient { p_id: i32 },
 }
 
-pub fn new_video_encoder(video_params: &VideoParams, video_frame_type: &VideoFrameType, video_encoder_type: &VideoEncoderType) -> Result<video::Encoder> {
+#[repr(usize)]
+pub enum AudioEncoderType { // represents the 'Frame Size'
+    AAC = 1024,
+}
+
+
+pub fn new_video_encoder(video_params: &VideoParams, video_frame_type_data: &VideoFormatTypeData, video_encoder_type: &VideoEncoderType) -> Result<video::Encoder> {
     let codec = match video_encoder_type {
         VideoEncoderType::HevcAmf => {find_by_name("hevc_amf").ok_or(ffmpeg_next::Error::EncoderNotFound)?}
         VideoEncoderType::QsvOderSo => {return Err(Error::NotYetImplemented.into())}
@@ -40,8 +47,8 @@ pub fn new_video_encoder(video_params: &VideoParams, video_frame_type: &VideoFra
     let ctx = ffmpeg_next::codec::context::Context::new_with_codec(codec);
     let mut enc = ctx.encoder().video().unwrap();
 
-    match video_frame_type {
-        VideoFrameType::D3D11 { hw_device_ctx, hw_frame_ctx } => {
+    match video_frame_type_data {
+        VideoFormatTypeData::D3D11 { hw_device_ctx, hw_frame_ctx } => {
             let raw_ctx = unsafe { enc.as_mut_ptr() };
             unsafe {
                 (*raw_ctx).hw_device_ctx = av_buffer_ref(*hw_device_ctx);
@@ -64,6 +71,21 @@ pub fn new_video_encoder(video_params: &VideoParams, video_frame_type: &VideoFra
     }
 }
 
-pub fn new_audio(audio_params: AudioParams, audio_frame_type: AudioFrameType, audio_encoder_type: AudioEncoderType) -> audio::Encoder {
-    todo!()
+pub fn new_audio_encoder(audio_params: &AudioParams, audio_frame_type_data: &AudioFormatTypeData, audio_encoder_type: &AudioEncoderType) -> Result<audio::Encoder> {
+    let codec = match audio_encoder_type {
+        AudioEncoderType::AAC => {find(ffmpeg_next::codec::Id::AAC).ok_or(ffmpeg_next::Error::EncoderNotFound)?}
+        _ => return Err(Error::NotYetImplemented.into())
+    };
+
+    let ctx = ffmpeg_next::codec::context::Context::new_with_codec(codec);
+    let mut enc = ctx.encoder().audio().unwrap();
+
+    enc.set_rate(audio_params.base_params.rate);
+    enc.set_channel_layout(audio_params.channel_layout);
+    enc.set_format(audio_params.format);
+    enc.set_time_base((1, audio_params.base_params.rate));
+    enc.set_flags(audio_params.base_params.flags);
+
+    let audio_encoder = enc.open_as(codec).unwrap();
+    Ok(audio_encoder)
 }

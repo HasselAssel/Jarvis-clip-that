@@ -7,8 +7,8 @@ use crate::ring_buffer::traits::PacketRingBuffer;
 use crate::types::{Packet, Result};
 
 pub trait Recorder<PRB: PacketRingBuffer> {
-    fn start_capturing(self) -> JoinHandle<Result<()>>;
-    fn send_frame_and_receive_packets(ring_buffer: &Arc<Mutex<PRB>>, encoder: &mut codec::encoder::Encoder, frame: &ffmpeg_next::Frame, mut duration: i64) -> Result<()>{
+    fn start_capturing(self: Box<Self>) -> JoinHandle<Result<()>>;
+    fn send_frame_and_receive_packets(ring_buffer: &Arc<Mutex<PRB>>, encoder: &mut codec::encoder::Encoder, frame: &ffmpeg_next::Frame, mut duration: i64) -> Result<()> where Self: Sized {
         encoder.send_frame(frame)?;
 
         let mut packet = Packet::empty();

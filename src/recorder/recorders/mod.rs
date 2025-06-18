@@ -3,3 +3,4 @@ pub mod audio;
 pub mod encoders;
 pub mod d3d11;
 pub mod frame;
+pub mod wasapi;
