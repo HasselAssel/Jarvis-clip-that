@@ -1,6 +1,5 @@
 use std::collections::HashSet;
 use std::sync::{Arc, Mutex};
-use std::sync::mpsc::Sender;
 use std::thread;
 use std::thread::JoinHandle;
 

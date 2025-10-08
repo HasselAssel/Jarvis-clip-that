@@ -84,7 +84,7 @@ impl Saver {
         let ring_buffer = audio_ring_buffer.lock().unwrap();
         let mut audio_packets = ring_buffer.copy_out(min_requested_frames);
         drop(ring_buffer);
-        let offset =(offset - 1/*WEIRD BUT MAYBE GOOD*/) * 1600/*48000 / 30*/;// & 0x7FFFFFFFFFFFFC00i64; // TODO: NOT FINAL!!!!!!!!!!
+        let offset = (offset - 1/*WEIRD BUT MAYBE GOOD*/) * 1600/*48000 / 30*/;// & 0x7FFFFFFFFFFFFC00i64; // TODO: NOT FINAL!!!!!!!!!!
         let _offset = audio_packets.iter().map(|a| a.pts().unwrap_or(i64::MAX)).min().unwrap_or(0);
         let max = audio_packets.iter().map(|a| a.pts().unwrap_or(i64::MIN)).max().unwrap_or(0);
         println!("audio: min: {}, max: {}, used offset: {}", _offset, max, offset);

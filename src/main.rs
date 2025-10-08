@@ -1,44 +1,41 @@
-use crossbeam::channel::{unbounded, select};
-
-use rdev::Key;
-
-use crate::recorder::clipper::key_listener::KeyListener;
-use crate::recorder::creator::CompleteRecorder;
+use std::thread;
+use std::time::Duration;
+use crate::recorders::audio::sources::enums::{AudioCodec, AudioSourceType};
+use crate::recorders::recorder::{create_audio_recorder, create_video_recorder};
+use crate::recorders::save::saver::Saver;
+use crate::recorders::video::sources::enums::{VideoCodec, VideoSourceType};
 use crate::ring_buffer::packet_handlers::KeyFrameStartPacketWrapper;
 use crate::ring_buffer::ring_buffer::RingBuffer;
 use crate::types::Packet;
 
-mod types;
 mod error;
-mod ring_buffer;
-mod recorder;
+mod types;
 mod wrappers;
-mod egui;
+mod ring_buffer;
+mod recorders;
 
 fn main() {
-    //egui::window::_main().expect("TODO: panic message");
+    type VideoPacketRingBufferType = RingBuffer<KeyFrameStartPacketWrapper>;
+    type AudioPacketRingBufferType = RingBuffer<Packet>;
 
-    type VPRB = RingBuffer<KeyFrameStartPacketWrapper>;
-    type APRB = RingBuffer<Packet>;
+    let video_source_type = VideoSourceType::D3d11;
+    let video_codec = VideoCodec::Amf;
 
-    let mut recorder = CompleteRecorder::<VPRB, APRB>::create_recorder();
+    let audio_source_type = AudioSourceType::WasApi;
+    let audio_codec = AudioCodec::AAC;
 
-    let mut key_listener = KeyListener::new();
-    let (sender, receiver) = unbounded();
-    key_listener.register_shortcut(&[Key::Alt, Key::KeyM], move || sender.send(()).unwrap());
+    let seconds = 20;
+    let fps = 30;
 
-    recorder.start();
-    key_listener.start();
+    let mut video_recorder = create_video_recorder::<VideoPacketRingBufferType>(video_source_type, video_codec, seconds, 2560, 1440, fps).unwrap();
+    let mut audio_recorder = create_audio_recorder::<AudioPacketRingBufferType>(audio_source_type, audio_codec, seconds).unwrap();
+    let saver = Saver::new(video_recorder.parameters.clone(), audio_recorder.parameters.clone(), "out", "Chat Clip That", ".mp4");
 
-    /*while receiver.recv().is_ok() {
-        recorder.saver.standard_save_to_disc(&recorder.video_recorder.1, &recorder.audio_recoders[0].1, None).unwrap()
-    }*/
+    video_recorder.start_recording();
+    audio_recorder.start_recording();
 
-    loop {
-        select! {
-            recv(receiver) -> _ => {
-                recorder.saver.standard_save_to_disc(&recorder.video_recorder.1, &recorder.audio_recoders[0].1, None).unwrap()
-            }
-        }
-    }
+    thread::sleep(Duration::from_secs(25));
+
+    //saver.standard_save_to_discTEST(&video_recorder.ring_buffer, None).unwrap();
+    saver.standard_save_to_disc(&video_recorder.ring_buffer, &audio_recorder.ring_buffer, None).unwrap()
 }

@@ -1,4 +1,5 @@
 use std::ops::Deref;
+
 use wasapi::AudioClient;
 use windows::Win32::Foundation::HANDLE;
 

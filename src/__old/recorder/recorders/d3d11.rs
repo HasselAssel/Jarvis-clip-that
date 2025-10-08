@@ -48,7 +48,7 @@ pub fn create_id3d11device(monitor: u32) -> Result<(ID3D11Device, ID3D11DeviceCo
     Ok((device, context, duplication))
 }
 
-pub fn get_hw_device_and_frame_cxt(device: &ID3D11Device, video_params: &VideoParams) -> (*mut AVBufferRef, *mut AVBufferRef) { // TODO: Include other AVHWDeviceType, and AVPixelFormat for format and swformat
+pub fn get_hw_device_and_frame_cxt(device: &ID3D11Device) -> (*mut AVBufferRef, *mut AVBufferRef) {
     let mut hw_device_ctx = unsafe { av_hwdevice_ctx_alloc(AVHWDeviceType::AV_HWDEVICE_TYPE_D3D11VA) };
     if hw_device_ctx.is_null() {
         panic!("Failed to allocate HW device context");

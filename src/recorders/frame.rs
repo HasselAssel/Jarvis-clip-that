@@ -25,18 +25,10 @@ pub fn create_av_frame(format: AVPixelFormat, width: i32, height: i32, hw_frame_
         //return Err(format!("av_hwframe_get_buffer failed: {}", ret));
         return Err(Unknown.into());
     }
-    /*unsafe {
-        (*av_frame).format = format as i32; // AV_PIX_FMT_D3D11 as i32;
-        (*av_frame).width = self.out_width as _;
-        (*av_frame).height = self.out_height as _;
-        //(*av_frame).data[0] = nv12_tex.as_raw() as _;
-        //(*av_frame).buf[0] = texture_buffer;
-        (*av_frame).hw_frames_ctx = av_buffer_ref(hw_frame_ctx as _);
-    }*/
     Ok(av_frame)
 }
 
-pub fn create_frames(format: Sample, size: usize, layout: ChannelLayout) -> (Audio, Audio) {
+pub fn create_audio_frames(format: Sample, size: usize, layout: ChannelLayout) -> (Audio, Audio) {
     let frame = Audio::new(
         format,
         size,
@@ -53,31 +45,18 @@ pub fn create_frames(format: Sample, size: usize, layout: ChannelLayout) -> (Aud
     (frame, silent_frame)
 }
 
-pub unsafe fn copy_into_audio_frame(frame: &mut Audio, buffer: Vec<u8>) { //ONLY FOR 4 byte samples
+pub unsafe fn copy_into_audio_frame(frame: &mut Audio, buffer: Vec<u8>) { // ONLY FOR 4 byte samples
     let linesize = unsafe { (*frame.as_ptr()).linesize[0] as usize };
     let ptr0 = unsafe { (*frame.as_ptr()).extended_data.offset(0).read() };
     let ptr1 = unsafe { (*frame.as_ptr()).extended_data.offset(1).read() };
-    // Get mutable slices to the destination planes first
+    // get mutable slices to the destination planes
     let left_plane = unsafe { std::slice::from_raw_parts_mut(ptr0, linesize) };
     let right_plane = unsafe { std::slice::from_raw_parts_mut(ptr1, linesize) };
 
-    // Process buffer directly into planes
+    // process buffer directly into planes
     for (i, chunk) in buffer.chunks(8).enumerate() {
         let offset = i * 4;
         left_plane[offset..offset + 4].copy_from_slice(&chunk[0..4]);
         right_plane[offset..offset + 4].copy_from_slice(&chunk[4..8]);
     }
-
-    /*for (i, chunk) in buffer.chunks(8).enumerate() {
-        if chunk.len() >= 8 {
-            let offset = i * 4;
-            if offset + 4 > left_plane.len() || offset + 4 > right_plane.len() {
-                panic!("Destination planes too small");
-            }
-            left_plane[offset..offset + 4].copy_from_slice(&chunk[0..4]);
-            right_plane[offset..offset + 4].copy_from_slice(&chunk[4..8]);
-        } else {
-            panic!("Data not divisible by 8");
-        }
-    }*/
 }

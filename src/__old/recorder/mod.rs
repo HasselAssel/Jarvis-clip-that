@@ -1,5 +1,5 @@
 mod traits;
-mod recorders;
+pub mod recorders;
 mod parameters;
 pub mod creator;
 pub mod clipper;

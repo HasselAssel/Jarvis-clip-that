@@ -35,8 +35,8 @@ impl<VPRB: PacketRingBuffer, APRB: PacketRingBuffer> CompleteRecorder<VPRB, APRB
                 flags: Flags::GLOBAL_HEADER,
                 rate: 30, //fps
             },
-            out_width: 640,
-            out_height: 480,
+            out_width: 2560,
+            out_height: 1440,
         };
 
         let audio_params = AudioParams {
@@ -90,7 +90,7 @@ impl<VPRB: PacketRingBuffer, APRB: PacketRingBuffer> CompleteRecorder<VPRB, APRB
 
 fn create_video_recorder<PRB: PacketRingBuffer + 'static>(video_format_type: VideoFormatType, video_encoder_type: VideoEncoderType, video_params: VideoParams) -> Result<(Box<dyn Recorder<PRB>>, Arc<Mutex<PRB>>, Parameters)> {
     let create_rb = || -> Arc<Mutex<PRB>> {
-        let ring_buffer = PRB::new((10 * video_params.base_params.rate) as u32);
+        let ring_buffer = PRB::new((60 * video_params.base_params.rate) as u32);
         Arc::new(Mutex::new(ring_buffer))
     };
 
@@ -114,7 +114,7 @@ fn create_video_recorder<PRB: PacketRingBuffer + 'static>(video_format_type: Vid
 
 fn create_audio_recorder<PRB: PacketRingBuffer + 'static>(audio_format_type: AudioFormatType, audio_encoder_type: AudioEncoderType, audio_params: AudioParams) -> Result<Vec<(Box<dyn Recorder<PRB>>, Arc<Mutex<PRB>>, Parameters)>> {
     let create_rb = || -> Arc<Mutex<PRB>> {
-        let ring_buffer = PRB::new((10 * audio_params.base_params.rate) as u32);
+        let ring_buffer = PRB::new((60 * audio_params.base_params.rate) as u32);
         Arc::new(Mutex::new(ring_buffer))
     };
 
