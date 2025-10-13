@@ -1,2 +1,2 @@
-pub mod desktop_recorder;
+pub mod audio_recorder;
 pub mod sources;

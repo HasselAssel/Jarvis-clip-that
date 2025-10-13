@@ -4,7 +4,6 @@ use ffmpeg_next::format::Sample;
 use ffmpeg_next::frame::Audio;
 
 use ffmpeg_next::sys::{av_buffer_ref, av_frame_alloc, av_hwframe_get_buffer, AVBufferRef, AVFrame, AVPixelFormat};
-use windows_core::s;
 
 use crate::error::Error::Unknown;
 use crate::types::Result;
@@ -39,13 +38,13 @@ pub fn create_audio_frames(format: Sample, size: usize, layout: ChannelLayout) -
         size,
         layout,
     );
-    let buf = vec![0u8; size * silent_frame.format().bytes()];
+    let buf = vec![0u8; size * silent_frame.format().bytes() * silent_frame.channels() as usize];
     unsafe { copy_into_audio_frame(&mut silent_frame, buf); }
 
     (frame, silent_frame)
 }
 
-pub unsafe fn copy_into_audio_frame(frame: &mut Audio, buffer: Vec<u8>) { // ONLY FOR 4 byte samples
+pub unsafe fn copy_into_audio_frame(frame: &mut Audio, buffer: Vec<u8>) { // ONLY FOR 4 byte stereo
     let linesize = unsafe { (*frame.as_ptr()).linesize[0] as usize };
     let ptr0 = unsafe { (*frame.as_ptr()).extended_data.offset(0).read() };
     let ptr1 = unsafe { (*frame.as_ptr()).extended_data.offset(1).read() };

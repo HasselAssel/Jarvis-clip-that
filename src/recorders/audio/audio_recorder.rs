@@ -1,10 +1,11 @@
-use std::collections::VecDeque;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Condvar, Mutex};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread;
 
 use ffmpeg_next::encoder::audio::Encoder;
 use ffmpeg_next::util::frame::audio::Audio;
-use windows::Win32::System::Performance::{QueryPerformanceCounter, QueryPerformanceFrequency};
+use windows::Win32::Media::Audio::{eMultimedia, eRender, IAudioSessionControl2, IAudioSessionManager2, IMMDeviceEnumerator, MMDeviceEnumerator};
+use windows::Win32::System::Com::{CLSCTX_ALL, CoCreateInstance};
 
 use crate::recorders::audio::sources::traits::AudioSource;
 use crate::recorders::traits::TRecorder;
@@ -34,14 +35,26 @@ impl<PRB: PacketRingBuffer, AS: AudioSource + Send> AudioRecorder<PRB, AS> {
 }
 
 impl<PRB: PacketRingBuffer, AS: AudioSource + Send> TRecorder<PRB> for AudioRecorder<PRB, AS> {
-    fn start_capturing(mut self: Box<Self>) -> RecorderJoinHandle {
+    fn start_capturing(mut self: Box<Self>, stop_capturing_callback: Option<Arc<AtomicBool>>) -> RecorderJoinHandle {
+        fn help<PRB: PacketRingBuffer, AS: AudioSource + Send>(selbst: &mut Box<AudioRecorder<PRB, AS>>) {
+            selbst.audio_source.await_new_audio();
+
+            selbst.audio_source.gather_new_audio(&selbst.ring_buffer, &mut selbst.audio_encoder, &mut selbst.frame, &mut selbst.silent_frame).expect("TODO: panic message");
+        }
+
         thread::spawn(move || -> Result<()> {
             self.audio_source.init();
 
-            loop {
-                self.audio_source.await_new_audio();
-
-                self.audio_source.gather_new_audio(&self.ring_buffer, &mut self.audio_encoder, &mut self.frame, &mut self.silent_frame).expect("TODO: panic message");
+            if let Some(stop_capturing_callback) = stop_capturing_callback {
+                while stop_capturing_callback.load(Ordering::Relaxed) {
+                    help(&mut self);
+                }
+                Ok(())
+            } else {
+                loop {
+                    help(&mut self);
+                }
+                Ok(())
             }
         })
     }

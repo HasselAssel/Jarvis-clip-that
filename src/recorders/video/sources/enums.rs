@@ -4,6 +4,6 @@ pub enum VideoCodec {
 }
 
 pub enum VideoSourceType {
-    D3d11,
+    D3d11 {monitor_id: u32},
     TEST,
 }

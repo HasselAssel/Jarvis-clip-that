@@ -1,8 +1,8 @@
 use std::ptr::null_mut;
 use ffmpeg_next::ffi::{av_buffer_create, AVBufferRef, AVFrame};
 use ffmpeg_next::sys::{av_hwdevice_ctx_alloc, av_hwdevice_ctx_init, av_hwframe_ctx_alloc, av_hwframe_ctx_init, av_buffer_unref, AVHWDeviceType, AVHWDeviceContext, AVPixelFormat, AVHWFramesContext};
+use windows::core::Interface;
 use windows::Win32::Graphics::Direct3D11::{ID3D11Device, ID3D11Texture2D};
-use windows_core::Interface;
 use crate::recorders::video::sources::d3d111::traits::D3d11EncoderHwContext;
 use crate::wrappers::MaybeSafeFFIPtrWrapper;
 use crate::types::Result;

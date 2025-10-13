@@ -27,14 +27,17 @@ impl WasapiEncoderCtx for AacContext {
                 packet_length as usize * format.nBlockAlign as usize,
             )};
 
+            //println!("{:?}", buffer);
+
             assert_eq!(buffer.len() % 8, 0);
             audio_buffer.extend(buffer);
 
             unsafe {capture_client.ReleaseBuffer(packet_length).unwrap(); };
         }
 
-        while audio_buffer.len() >= AAC_FRAME_SIZE * format.nBlockAlign as usize {
-            let buffer: Vec<u8> = audio_buffer.drain(..AAC_FRAME_SIZE * format.nBlockAlign as usize).collect();
+        let size = AAC_FRAME_SIZE * format.nBlockAlign as usize;
+        while audio_buffer.len() >= size {
+            let buffer: Vec<u8> = audio_buffer.drain(..size).collect();
             let sample_frames = AAC_FRAME_SIZE;
 
 
