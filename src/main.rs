@@ -1,10 +1,11 @@
 use std::thread;
 use std::time::Duration;
 use rand::TryRngCore;
+use rdev::Key;
 use crate::recorders::audio::sources::enums::{AudioCodec, AudioSourceType};
 use crate::recorders::audio::sources::wasapi::source::AudioProcessWatcher;
 use crate::recorders::recorder::{create_audio_recorder, create_video_recorder};
-use crate::recorders::save::_saver::Saver;
+use crate::recorders::save::key_listener::KeyListener;
 use crate::recorders::save::saver::SaverEnv;
 use crate::recorders::video::sources::enums::{VideoCodec, VideoSourceType};
 use crate::ring_buffer::packet_handlers::KeyFrameStartPacketWrapper;
@@ -52,28 +53,40 @@ async fn main_sync() {
     //let mut audio_recorder = create_audio_recorder::<AudioPacketRingBufferType>(&audio_source_type, &audio_codec, seconds).unwrap();
     let mut audio_recorder = AudioProcessWatcher::<AudioPacketRingBufferType>::new(audio_codec, true, seconds);
 
-    let saver = Saver::new(video_recorder.parameters.clone(), video_recorder.parameters.clone(), "out", "Chat Clip That", ".mp4");
+
     let save_env = SaverEnv::new("out", "Chat Clip That");
+
+
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<()>();
+
+
+    let mut key_listener = KeyListener::new();
+    key_listener.register_shortcut(&[Key::Alt, Key::KeyM], move || {
+        println!("OK GARMIN VIDEO SPEICHERN");
+        tx.send(()).unwrap();
+    });
+
+    key_listener.start();
+
 
     video_recorder.start_recording(None);
     audio_recorder.start_recording(None).await;
 
-    tokio::time::sleep(Duration::from_secs_f64(8.1)).await;
+    loop {
+        tokio::select! {
+            Some(_) = rx.recv() => {
+                let mut save = save_env.new_save::<String>(None);
 
+                let _ = save.add_stream(&video_recorder.ring_buffer, &video_recorder.parameters, true).unwrap();
 
-    let mut save = save_env.new_save::<String>(None);
+                for (p_id, (recorder, _, _)) in audio_recorder.audio_recorders.lock().await.iter() {
+                    println!("stream added for: {}", p_id);
+                    let _ = save.add_stream(&recorder.ring_buffer, &recorder.parameters, false).unwrap();
+                }
 
-    let _ = save.add_stream(&video_recorder.ring_buffer, &video_recorder.parameters, true).unwrap();
-    //let _ = save.add_stream(&audio_recorder.ring_buffer, &audio_recorder.parameters, false).unwrap();
-
-    for (p_id, (recorder, _, _)) in audio_recorder.audio_recorders.lock().await.iter() {
-        println!("stream added for: {}", p_id);
-        let _ = save.add_stream(&recorder.ring_buffer, &recorder.parameters, false).unwrap();
+                let _ = save.finalize_and_save().unwrap();
+            },
+            else => break,
+        }
     }
-
-    let _ = save.finalize_and_save().unwrap();
-
-    //saver.standard_save_to_discTEST(&video_recorder.ring_buffer, None).unwrap();
-    //saver.standard_save_to_discT(&video_recorder.ring_buffer, &audio_recorder.ring_buffer, None).unwrap()
-
 }

@@ -18,7 +18,6 @@ impl WasapiEncoderCtx for AacContext {
             let new_pts = ((qpc_pos - start_time as u64) * format.nSamplesPerSec as u64 / frequency as u64) as i64;
             let diff = (new_pts - *pts_counter).max(0);
             if diff >= AAC_FRAME_SIZE as _ {
-                println!("ADDED SILENCE!!!");
                 flush_and_silence(&mut audio_buffer, diff, pts_counter, frame, silent_frame, format, ring_buffer, encoder);
             }
 
@@ -26,8 +25,6 @@ impl WasapiEncoderCtx for AacContext {
                 data as *const u8,
                 packet_length as usize * format.nBlockAlign as usize,
             )};
-
-            //println!("{:?}", buffer);
 
             assert_eq!(buffer.len() % 8, 0);
             audio_buffer.extend(buffer);

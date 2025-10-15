@@ -1,8 +1,10 @@
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
+
 use chrono::Local;
 use ffmpeg_next::codec::Parameters;
 use ffmpeg_next::format::context;
+
 use crate::ring_buffer::traits::PacketRingBuffer;
 use crate::types::{Packet, Result};
 
@@ -37,6 +39,10 @@ impl Save {
 
         let ring_buffer = ring_buffer.lock().unwrap();
         let packets = ring_buffer.copy_out(None);
+        drop(ring_buffer);
+
+        let packets_pts: Vec<_> = packets.iter().map(|packet| packet.pts().unwrap()).collect();
+        println!("Audio Stream: {:?}", packets_pts);
 
         self.streams.push((packets, tb));
 
@@ -62,6 +68,7 @@ impl Save {
     }
 }
 
+#[derive(Clone)]
 pub struct SaverEnv {
     out_dir_path: String,
     base_file_name: String,

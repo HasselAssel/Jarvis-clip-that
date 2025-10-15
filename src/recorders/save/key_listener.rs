@@ -5,11 +5,9 @@ use std::thread::JoinHandle;
 
 use rdev::{Event, EventType, Key, listen};
 
-type Callback = Box<dyn Fn() + Send + 'static>;
-
 struct Shortcut {
     keys: HashSet<Key>,
-    action: Callback,
+    action: Box<dyn Fn() + Send + 'static>,
 }
 
 pub struct KeyListener {
@@ -40,7 +38,7 @@ impl KeyListener {
         self.pressed_keys.lock().unwrap().clear();
     }
 
-    pub fn start(&self) -> JoinHandle<()> {
+    pub fn start(&self) -> () {
         let shortcuts = self.shortcuts.clone();
         let pressed_keys = self.pressed_keys.clone();
 
@@ -71,6 +69,6 @@ impl KeyListener {
             if let Err(e) = listen(handler) {
                 eprintln!("Error: {:?}", e);
             }
-        })
+        });
     }
 }
