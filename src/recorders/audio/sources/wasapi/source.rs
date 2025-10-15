@@ -2,7 +2,7 @@ use std::collections::{HashMap, VecDeque};
 use std::sync::{Arc, Mutex};
 use ffmpeg_next::encoder::audio::Encoder;
 use ffmpeg_next::frame::Audio;
-use windows::Win32::Media::Audio::{AUDCLNT_SHAREMODE_SHARED, AUDCLNT_STREAMFLAGS_EVENTCALLBACK, AUDCLNT_STREAMFLAGS_LOOPBACK, PROCESS_LOOPBACK_MODE_EXCLUDE_TARGET_PROCESS_TREE, PROCESS_LOOPBACK_MODE_INCLUDE_TARGET_PROCESS_TREE, AUDIOCLIENT_PROCESS_LOOPBACK_PARAMS, AUDIOCLIENT_ACTIVATION_PARAMS_0, AUDIOCLIENT_ACTIVATION_TYPE_PROCESS_LOOPBACK, AUDIOCLIENT_ACTIVATION_PARAMS, eConsole, eRender, IAudioCaptureClient, IAudioClient, IMMDeviceEnumerator, MMDeviceEnumerator, WAVEFORMATEX, IAudioSessionManager2, eMultimedia, IAudioSessionControl2, WAVE_FORMAT_PCM, WAVEFORMATEXTENSIBLE, WAVEFORMATEXTENSIBLE_0, AudioSessionState, AudioSessionDisconnectReason, AudioSessionStateExpired, IAudioSessionControl};
+use windows::Win32::Media::Audio::{AUDCLNT_SHAREMODE_SHARED, AUDCLNT_STREAMFLAGS_EVENTCALLBACK, AUDCLNT_STREAMFLAGS_LOOPBACK, PROCESS_LOOPBACK_MODE_EXCLUDE_TARGET_PROCESS_TREE, PROCESS_LOOPBACK_MODE_INCLUDE_TARGET_PROCESS_TREE, AUDIOCLIENT_PROCESS_LOOPBACK_PARAMS, AUDIOCLIENT_ACTIVATION_PARAMS_0, AUDIOCLIENT_ACTIVATION_TYPE_PROCESS_LOOPBACK, AUDIOCLIENT_ACTIVATION_PARAMS, eConsole, eRender, IAudioCaptureClient, IAudioClient, IMMDeviceEnumerator, MMDeviceEnumerator, WAVEFORMATEX, IAudioSessionManager2, eMultimedia, IAudioSessionControl2, WAVE_FORMAT_PCM, WAVEFORMATEXTENSIBLE, WAVEFORMATEXTENSIBLE_0, AudioSessionState, AudioSessionDisconnectReason, AudioSessionStateExpired, IAudioSessionControl, eCapture};
 use windows::Win32::System::Com::{BLOB, CLSCTX_ALL, CoCreateInstance};
 use windows::Win32::System::Performance::{QueryPerformanceCounter, QueryPerformanceFrequency};
 use windows::Win32::System::Threading::{CreateEventW, INFINITE, WaitForSingleObject};
@@ -81,8 +81,8 @@ impl<E: WasapiEncoderCtx> AudioSourceWasapi<E> {
         })
     }
 
-    pub fn new_sys(context_encoder: E) -> Result<Self> {
-        let (client, format) = create_system_iaudioclient().unwrap();
+    pub fn new_default(context_encoder: E, render_else_capture: bool) -> Result<Self> {
+        let (client, format) = create_default_iaudioclient(render_else_capture).unwrap();
         Self::new(context_encoder, client, format)
     }
 
@@ -129,7 +129,7 @@ impl<E: WasapiEncoderCtx> AudioSource for AudioSourceWasapi<E> {
 }
 
 
-pub fn create_system_iaudioclient() -> Result<(IAudioClient, WAVEFORMATEX)> {
+pub fn create_default_iaudioclient(render_else_capture: bool) -> Result<(IAudioClient, WAVEFORMATEX)> {
     let try_init = unsafe {
         windows::Win32::System::Com::CoInitializeEx(None, windows::Win32::System::Com::COINIT_MULTITHREADED)
     };
@@ -145,9 +145,13 @@ pub fn create_system_iaudioclient() -> Result<(IAudioClient, WAVEFORMATEX)> {
         ).unwrap()
     };
 
+    let dataflow = match render_else_capture {
+        true => { eRender }
+        false => { eCapture }
+    };
     let device = unsafe {
         enumerator.GetDefaultAudioEndpoint(
-            eRender,
+            dataflow,
             eConsole,
         ).unwrap()
     };
@@ -161,10 +165,14 @@ pub fn create_system_iaudioclient() -> Result<(IAudioClient, WAVEFORMATEX)> {
 
     let format = unsafe { client.GetMixFormat()? };
 
+    let streamflags = AUDCLNT_STREAMFLAGS_EVENTCALLBACK | match render_else_capture {
+        true => {AUDCLNT_STREAMFLAGS_LOOPBACK}
+        false => {0}
+    };
     unsafe {
         client.Initialize(
             AUDCLNT_SHAREMODE_SHARED,
-            AUDCLNT_STREAMFLAGS_LOOPBACK | AUDCLNT_STREAMFLAGS_EVENTCALLBACK,
+            streamflags,
             10_000_000,
             0,
             format,
@@ -287,9 +295,6 @@ fn create_process_iaudioclient(process_id: u32, include_tree: bool) -> Result<(I
     Ok((client, format.Format))
 }
 
-fn create_input_iaudioclient() -> Result<(IAudioClient, WAVEFORMATEX)> {
-
-}
 
 
 pub struct AudioProcessWatcher<PRB: PacketRingBuffer> {

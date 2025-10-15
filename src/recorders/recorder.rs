@@ -115,7 +115,7 @@ pub fn create_audio_recorder<PRB: PacketRingBuffer + 'static>(audio_source_type:
             match audio_code_c {
                 AudioCodec::AAC => {
                     let sample = Sample::F32(Type::Planar);
-                    let aac_vs = AudioSourceWasapi::new_sys(AacContext)?;
+                    let aac_vs = AudioSourceWasapi::new_default(AacContext, true)?;
                     let channel_layout = match aac_vs.format.nChannels {
                         1 => ChannelLayout::MONO,
                         2 => ChannelLayout::STEREO,
