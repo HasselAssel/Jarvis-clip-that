@@ -15,9 +15,9 @@ pub const AAC_FRAME_SIZE: usize = 1024;
 impl WasapiEncoderCtx for AacContext {
     fn process_audio<PRB: PacketRingBuffer>(&mut self, ring_buffer: &Arc<Mutex<PRB>>, mut encoder: &mut Encoder, mut frame: &mut Audio, silent_frame: &mut Audio, packet_length: u32, data: *mut u8, qpc_pos: u64, start_time: i64, frequency: i64, format: &WAVEFORMATEX, pts_counter: &mut i64, mut audio_buffer: &mut VecDeque<u8>, capture_client: &IAudioCaptureClient) {
         if packet_length > 0 {
-            let new_pts = ((qpc_pos - start_time as u64) * format.nSamplesPerSec as u64 / frequency as u64) as i64;
+            let new_pts = ((qpc_pos as i64 - start_time).max(0) as u64 * format.nSamplesPerSec as u64 / frequency as u64) as i64;
             let diff = (new_pts - *pts_counter).max(0);
-            if diff >= AAC_FRAME_SIZE as _ {
+            if diff >= AAC_FRAME_SIZE as i64 {
                 flush_and_silence(&mut audio_buffer, diff, pts_counter, frame, silent_frame, format, ring_buffer, encoder);
             }
 

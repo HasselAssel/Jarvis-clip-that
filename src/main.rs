@@ -17,40 +17,29 @@ mod types;
 mod wrappers;
 mod ring_buffer;
 mod recorders;
+mod egui;
 
 #[tokio::main]
 async fn main() {
     main_sync().await
 }
 
+type VideoPacketRingBufferType = RingBuffer<KeyFrameStartPacketWrapper>;
+type AudioPacketRingBufferType = RingBuffer<Packet>;
 
 async fn main_sync() {
-    /*let pid = loop {
-        let mut input = String::new();
-        println!("GIMME A PID:");
-        std::io::stdin().read_line(&mut input).expect("Failed!");
-        match input.trim().parse::<u32>() {
-            Ok(n) => break n,
-            Err(_) => println!("Invalid input, please enter a valid number."),
-        }
-    };*/
-
-    type VideoPacketRingBufferType = RingBuffer<KeyFrameStartPacketWrapper>;
-    type AudioPacketRingBufferType = RingBuffer<Packet>;
-
     let video_source_type = VideoSourceType::D3d11 { monitor_id: 0 };
     let video_codec = VideoCodec::Amf;
 
-    //let audio_source_type = AudioSourceType::WasApiProcess { process_id: pid, include_tree: true };
-    //let audio_source_type = AudioSourceType::WasApiSys;
+    let audio_source_type = AudioSourceType::WasApiDefaultInput;
     let audio_codec = AudioCodec::AAC;
 
 
-    let seconds = 8;
+    let seconds = 30;
     let fps = 30;
 
     let mut video_recorder = create_video_recorder::<VideoPacketRingBufferType>(&video_source_type, &video_codec, seconds, 2560, 1440, fps).unwrap();
-    //let mut audio_recorder = create_audio_recorder::<AudioPacketRingBufferType>(&audio_source_type, &audio_codec, seconds).unwrap();
+    let mut audio_recorder_input = create_audio_recorder::<AudioPacketRingBufferType>(&audio_source_type, &audio_codec, seconds).unwrap();
     let mut audio_recorder = AudioProcessWatcher::<AudioPacketRingBufferType>::new(audio_codec, true, seconds);
 
 
@@ -71,20 +60,22 @@ async fn main_sync() {
 
     video_recorder.start_recording(None);
     audio_recorder.start_recording(None).await;
+    audio_recorder_input.start_recording(None);
 
     loop {
         tokio::select! {
             Some(_) = rx.recv() => {
                 let mut save = save_env.new_save::<String>(None);
 
-                let _ = save.add_stream(&video_recorder.ring_buffer, &video_recorder.parameters, true).unwrap();
+                save.add_stream(&video_recorder.ring_buffer, &video_recorder.parameters, true).unwrap();
+                save.add_stream(&audio_recorder_input.ring_buffer, &audio_recorder_input.parameters, false).unwrap();
 
                 for (p_id, (recorder, _, _)) in audio_recorder.audio_recorders.lock().await.iter() {
                     println!("stream added for: {}", p_id);
-                    let _ = save.add_stream(&recorder.ring_buffer, &recorder.parameters, false).unwrap();
+                    save.add_stream(&recorder.ring_buffer, &recorder.parameters, false).unwrap();
                 }
 
-                let _ = save.finalize_and_save().unwrap();
+                save.finalize_and_save().unwrap();
             },
             else => break,
         }

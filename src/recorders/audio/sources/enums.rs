@@ -4,6 +4,7 @@ pub enum AudioCodec {
 }
 
 pub enum AudioSourceType {
-    WasApiSys,
+    WasApiDefaultSys,
     WasApiProcess { process_id: u32, include_tree: bool },
+    WasApiDefaultInput,
 }

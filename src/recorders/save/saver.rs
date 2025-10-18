@@ -42,7 +42,8 @@ impl Save {
         drop(ring_buffer);
 
         let packets_pts: Vec<_> = packets.iter().map(|packet| packet.pts().unwrap()).collect();
-        println!("Audio Stream: {:?}", packets_pts);
+        println!("NEW STREAM PTS: {:?}", packets_pts);
+        println!("-------------------------------------------------------------------------------------------------------------------------------");
 
         self.streams.push((packets, tb));
 
@@ -50,11 +51,29 @@ impl Save {
     }
 
     pub fn finalize_and_save(mut self) -> Result<()> {
+        let min_pts_in_base_1_sec = self.streams.iter().filter_map(|(packets, tb)| if let Some(packet) = packets.first() {
+            Some((packet, tb))
+        } else {
+            None
+        }).filter_map(|(packet, tb)| if let Some(pts) = packet.pts(){
+           Some(pts as f64 / (tb.1 as f64 / tb.0 as f64))
+        } else {
+            None
+        }).reduce(f64::min).unwrap_or(0.0);
+
+        println!("min pts: {}", min_pts_in_base_1_sec);
+
+        let _ = self.streams.iter_mut().for_each(|(packets, tb)| packets.iter_mut().for_each(|packet| packet.set_pts(packet.pts().map(|pts| (pts as f64 - (tb.1 as f64 / tb.0 as f64) * min_pts_in_base_1_sec) as i64))));
+
         self.o_ctx.write_header().unwrap();
 
         let time_bases = self.o_ctx.streams().map(|stream| stream.time_base()).collect::<Vec<_>>().into_iter();
-
         for (i, (time_base, (packets, tb))) in time_bases.zip(self.streams.into_iter()).enumerate() {
+
+            let packets_pts: Vec<_> = packets.iter().map(|packet| packet.pts().unwrap()).collect();
+            println!("NEW STREAM PTS: {:?}", packets_pts);
+            println!("-------------------------------------------------------------------------------------------------------------------------------");
+
             for mut packet in packets {
                 packet.set_stream(i);
                 packet.rescale_ts(tb, time_base);

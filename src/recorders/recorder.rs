@@ -111,11 +111,17 @@ pub fn create_audio_recorder<PRB: PacketRingBuffer + 'static>(audio_source_type:
     let mut enc = ctx.encoder().audio().unwrap();
 
     let idk = match audio_source_type {
-        AudioSourceType::WasApiSys => {
+        AudioSourceType::WasApiDefaultSys | AudioSourceType::WasApiDefaultInput => {
+            let render_else_capture = match audio_source_type {
+                AudioSourceType::WasApiDefaultSys => { true }
+                AudioSourceType::WasApiDefaultInput => { false }
+                _ => { unreachable!() }
+            };
+
             match audio_code_c {
                 AudioCodec::AAC => {
                     let sample = Sample::F32(Type::Planar);
-                    let aac_vs = AudioSourceWasapi::new_default(AacContext, true)?;
+                    let aac_vs = AudioSourceWasapi::new_default(AacContext, render_else_capture)?;
                     let channel_layout = match aac_vs.format.nChannels {
                         1 => ChannelLayout::MONO,
                         2 => ChannelLayout::STEREO,

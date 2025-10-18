@@ -14,6 +14,7 @@ use std::{
     sync::Condvar,
 };
 use std::future::Future;
+use std::io::Read;
 use std::ops::Deref;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
@@ -164,16 +165,15 @@ pub fn create_default_iaudioclient(render_else_capture: bool) -> Result<(IAudioC
     };
 
     let format = unsafe { client.GetMixFormat()? };
-
     let streamflags = AUDCLNT_STREAMFLAGS_EVENTCALLBACK | match render_else_capture {
-        true => {AUDCLNT_STREAMFLAGS_LOOPBACK}
-        false => {0}
+        true => { AUDCLNT_STREAMFLAGS_LOOPBACK }
+        false => { 0 }
     };
     unsafe {
         client.Initialize(
             AUDCLNT_SHAREMODE_SHARED,
             streamflags,
-            10_000_000,
+            500_000,
             0,
             format,
             None,
@@ -285,7 +285,7 @@ fn create_process_iaudioclient(process_id: u32, include_tree: bool) -> Result<(I
             AUDCLNT_SHAREMODE_SHARED,
             AUDCLNT_STREAMFLAGS_LOOPBACK
                 | AUDCLNT_STREAMFLAGS_EVENTCALLBACK,
-            200_000,
+            500_000,
             0,
             &format.Format,
             None,
@@ -294,7 +294,6 @@ fn create_process_iaudioclient(process_id: u32, include_tree: bool) -> Result<(I
 
     Ok((client, format.Format))
 }
-
 
 
 pub struct AudioProcessWatcher<PRB: PacketRingBuffer> {
@@ -320,11 +319,7 @@ impl<PRB: PacketRingBuffer + 'static> AudioProcessWatcher<PRB> {
 }
 
 struct _AudioProcessWatcher<PRB: PacketRingBuffer> {
-    session_handle: WinAudio::IAudioSessionNotification,
     session_manager: IAudioSessionManager2,
-    add_process_rx: UnboundedReceiver<u32>,
-
-    test: Option<UnboundedReceiver<u32>>,
 
     audio_codec: AudioCodec,
     include_tree: bool,
@@ -342,19 +337,8 @@ impl<PRB: PacketRingBuffer + 'static> _AudioProcessWatcher<PRB> {
 
         let session_manager: IAudioSessionManager2 = unsafe { device.Activate(CLSCTX_ALL, None)? };
 
-        let (add_process_tx, mut add_process_rx) = tokio::sync::mpsc::unbounded_channel();
-        let (_remove_process_tx, rr3) = tokio::sync::mpsc::unbounded_channel();
-
-        let session_events = Arc::new(Mutex::new(HashMap::new()));
-
-        let session_handle: WinAudio::IAudioSessionNotification = SessionNotification { add_process_tx, _remove_process_tx, session_events }.into();
-
         Ok(Self {
-            session_handle,
             session_manager,
-            add_process_rx,
-
-            test: Some(rr3),
 
             audio_codec,
             include_tree,
@@ -377,13 +361,19 @@ impl<PRB: PacketRingBuffer + 'static> _AudioProcessWatcher<PRB> {
         let boo = Arc::new(AtomicBool::new(true));
         audio_recorders.insert(p_id, (recorder, p_name, boo));
 
-        println!("New Size: {}", audio_recorders.len());
-
-
         Some(())
     }
 
     pub async fn start_listening(mut self) -> Result<()> {
+        let (add_process_tx, mut add_process_rx) = tokio::sync::mpsc::unbounded_channel();
+        let (_remove_process_tx, mut remove_process_rx) = tokio::sync::mpsc::unbounded_channel();
+
+        let r_session_events = Arc::new(Mutex::new(HashMap::new()));
+        let session_events = r_session_events.clone();
+
+        let session_handle: WinAudio::IAudioSessionNotification = SessionNotification { add_process_tx, _remove_process_tx, session_events }.into();
+
+
         let session_enum = unsafe { self.session_manager.GetSessionEnumerator()? };
         let count = unsafe { session_enum.GetCount()? };
 
@@ -391,22 +381,22 @@ impl<PRB: PacketRingBuffer + 'static> _AudioProcessWatcher<PRB> {
 
         for i in 0..count {
             let session_control = unsafe { session_enum.GetSession(i)? };
-            unsafe { self.session_handle.OnSessionCreated(&session_control)? }
+            unsafe { session_handle.OnSessionCreated(&session_control)? }
         }
 
         for (_, (ref mut recorder, _, _)) in self.audio_recorders.lock().await.iter_mut() {
             recorder.start_recording(None);
         }
 
-        let _ = unsafe { &self.session_manager.RegisterSessionNotification(&self.session_handle) };
+        let _ = unsafe { &self.session_manager.RegisterSessionNotification(&session_handle) };
 
 
         let audio_recorders = self.audio_recorders.clone();
         let min_secs = self.min_secs;
-        let mut test = self.test.take().unwrap();
 
         tokio::spawn(async move {
-            while let Some(p_id) = self.add_process_rx.recv().await {
+            while let Some(p_id) = add_process_rx.recv().await {
+                println!("innalock");
                 if let Some(_) = unsafe { self.try_add_new_process(p_id) }.await {
                     let mut audio_recorders = self.audio_recorders.lock().await;
                     if let Some((ref mut recorder, _, boo)) = audio_recorders.get_mut(&p_id) {
@@ -416,12 +406,15 @@ impl<PRB: PacketRingBuffer + 'static> _AudioProcessWatcher<PRB> {
                     }
                 }
             }
+            println!("DONT");
         });
 
         tokio::spawn(async move {
             let mut audio_recorders = audio_recorders;
-            while let Some(p_id) = test.recv().await {
+            let mut r_session_events = r_session_events;
+            while let Some(p_id) = remove_process_rx.recv().await {
                 let mut audio_recorders = audio_recorders.clone();
+                let mut r_session_events = r_session_events.clone();
                 tokio::spawn(async move {
                     tokio::time::sleep(Duration::from_secs(min_secs as u64)).await;
                     let mut audio_recorders = audio_recorders.lock().await;
@@ -431,6 +424,9 @@ impl<PRB: PacketRingBuffer + 'static> _AudioProcessWatcher<PRB> {
                     } else {
                         println!("did NOT removed process {p_id}");
                     }
+
+                    let mut r_session_events = r_session_events.lock().unwrap();
+                    let _ = r_session_events.remove(&p_id);
                 });
             }
         });
@@ -467,7 +463,7 @@ struct SessionNotification {
     add_process_tx: tokio::sync::mpsc::UnboundedSender<u32>,
     _remove_process_tx: tokio::sync::mpsc::UnboundedSender<u32>,
 
-    session_events: Arc<Mutex<HashMap<u32, (WinAudio::IAudioSessionEvents, IAudioSessionControl2)>>>,
+    session_events: Arc<Mutex<HashMap<u32, (MaybeSafeComWrapper<WinAudio::IAudioSessionEvents>, MaybeSafeComWrapper<IAudioSessionControl2>)>>>,
 }
 
 #[allow(non_snake_case)]
@@ -477,19 +473,14 @@ impl WinAudio::IAudioSessionNotification_Impl for SessionNotification_Impl {
             let session_control: IAudioSessionControl = new_session.cast()?;
             let new_session2: IAudioSessionControl2 = new_session.cast()?;
             let p_id = unsafe { new_session2.GetProcessId()? };
-            let tx = self._remove_process_tx.clone();
 
             println!("OnSessionCreated NEW P_ID: {}", p_id);
 
-            let session_events = self.session_events.clone();
-            let delete_callback = Box::new(move || {
-                session_events.lock().unwrap().remove(&p_id)
-            });
-
-            let session_events: WinAudio::IAudioSessionEvents = SessionEvents { p_id, tx, delete_callback }.into();
+            let tx = self._remove_process_tx.clone();
+            let session_events: WinAudio::IAudioSessionEvents = SessionEvents { p_id, tx }.into();
             let _ = unsafe { new_session.RegisterAudioSessionNotification(&session_events) };
 
-            self.session_events.lock().unwrap().insert(p_id, (session_events, new_session2));
+            self.session_events.lock().unwrap().insert(p_id, (MaybeSafeComWrapper(session_events), MaybeSafeComWrapper(new_session2)));
 
             let _ = self.add_process_tx.send(p_id);
         }
@@ -501,15 +492,12 @@ impl WinAudio::IAudioSessionNotification_Impl for SessionNotification_Impl {
 pub struct SessionEvents {
     p_id: u32,
     tx: tokio::sync::mpsc::UnboundedSender<u32>,
-    delete_callback: Box<dyn Fn() -> Option<(WinAudio::IAudioSessionEvents, IAudioSessionControl2)>>,
 }
 
 impl WinAudio::IAudioSessionEvents_Impl for SessionEvents_Impl {
     fn OnStateChanged(&self, newstate: AudioSessionState) -> windows_core::Result<()> {
         println!("OnStateChanged, p_id: {}", self.p_id);
         if newstate == AudioSessionStateExpired {
-            println!("OnStateChanged_REMOVED, p_id: {}", self.p_id);
-            let removed = (self.delete_callback)();
             let _ = self.tx.send(self.p_id);
         }
         Ok(())
@@ -517,7 +505,6 @@ impl WinAudio::IAudioSessionEvents_Impl for SessionEvents_Impl {
 
     fn OnSessionDisconnected(&self, disconnectreason: AudioSessionDisconnectReason) -> windows_core::Result<()> {
         println!("OnSessionDisconnected, p_id: {}", self.p_id);
-        (self.delete_callback)();
         let _ = self.tx.send(self.p_id);
         Ok(())
     }
@@ -573,8 +560,8 @@ fn new_waveformatextensible(
         wValidBitsPerSample: validbits as u16,
     };
     let subformat = windows::Win32::Media::Multimedia::KSDATAFORMAT_SUBTYPE_IEEE_FLOAT; /*match sample_type {
-        Float => windows::Win32::Media::Multimedia::KSDATAFORMAT_SUBTYPE_IEEE_FLOAT,
-        Int => windows::Win32::Media::KernelStreaming::KSDATAFORMAT_SUBTYPE_PCM,
+        Float => windows::Win32::media::Multimedia::KSDATAFORMAT_SUBTYPE_IEEE_FLOAT,
+        Int => windows::Win32::media::KernelStreaming::KSDATAFORMAT_SUBTYPE_PCM,
     };*/
     // Only max 18 mask channel positions are defined,
     // https://docs.microsoft.com/en-us/windows/win32/api/mmreg/ns-mmreg-waveformatextensible

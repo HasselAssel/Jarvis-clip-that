@@ -21,9 +21,18 @@ rdev = "0.5.3"
 
 chrono = "0.4.41"
 
-#rodio = "0.20.1"
+rodio = "0.20.1"
 
 eframe = "0.31.1"
 
 cpal = "0.15.3"
 log = "0.4.25"
+image = "0.25.6"
+
+[[bin]]
+name = "Jarvis-clip-that"
+path = "src/main.rs"
+
+[[bin]]
+name = "Egui"
+path = "src/egui/egui.rs"
