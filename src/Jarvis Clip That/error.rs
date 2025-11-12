@@ -6,6 +6,7 @@ pub enum Error {
     Unknown,
 }
 
+#[allow(dead_code)]
 #[derive(Debug)]
 pub enum CustomError {
     FFMPEG(ffmpeg_next::Error),

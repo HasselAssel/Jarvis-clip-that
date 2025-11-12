@@ -10,7 +10,7 @@ use crate::types::Result;
 pub struct QsvAdapter;
 
 impl D3d11EncoderHwContext for QsvAdapter {
-    fn setup_hw_and_frame_ctx(&self, device: &ID3D11Device, width: i32, height: i32) -> Result<(Option<*mut AVBufferRef>, *mut AVBufferRef)> {
+    fn setup_hw_and_frame_ctx(&self, _device: &ID3D11Device, width: i32, height: i32) -> Result<(Option<*mut AVBufferRef>, *mut AVBufferRef)> {
         let mut d3d11_hwdev: *mut AVBufferRef = null_mut();
         let mut qsv_hwdev: *mut AVBufferRef = null_mut();
 
@@ -76,7 +76,7 @@ impl D3d11EncoderHwContext for QsvAdapter {
         Ok((Some(qsv_hwdev), hw_frame_ctx))
     }
 
-    fn prepare_frame(&self, av_frame: &MaybeSafeFFIPtrWrapper<AVFrame>, texture: &ID3D11Texture2D) -> Result<()> {
+    fn prepare_frame(&self, _av_frame: &MaybeSafeFFIPtrWrapper<AVFrame>, _texture: &ID3D11Texture2D) -> Result<()> {
         todo!()
     }
 }

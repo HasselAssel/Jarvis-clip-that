@@ -1,7 +1,6 @@
 use std::mem::{ManuallyDrop, MaybeUninit};
 use std::ptr::null_mut;
-use ffmpeg_next::ffi::{av_buffer_create, AVFrame};
-use ffmpeg_next::sys::{av_buffer_unref, av_hwdevice_ctx_alloc, av_hwdevice_ctx_init, AVBufferRef, AVHWDeviceType};
+use ffmpeg_next::ffi::AVFrame;
 use windows::core::Interface;
 use windows::Win32::Foundation::{HMODULE, TRUE};
 use windows::Win32::Graphics::Direct3D11::{D3D11_BIND_RENDER_TARGET, D3D11_BIND_SHADER_RESOURCE, D3D11_CREATE_DEVICE_BGRA_SUPPORT, D3D11_SDK_VERSION, D3D11_TEX2D_VPIV, D3D11_TEX2D_VPOV, D3D11_TEXTURE2D_DESC, D3D11_USAGE_DEFAULT, D3D11_VIDEO_FRAME_FORMAT_PROGRESSIVE, D3D11_VIDEO_PROCESSOR_CONTENT_DESC, D3D11_VIDEO_PROCESSOR_INPUT_VIEW_DESC, D3D11_VIDEO_PROCESSOR_INPUT_VIEW_DESC_0, D3D11_VIDEO_PROCESSOR_OUTPUT_VIEW_DESC, D3D11_VIDEO_PROCESSOR_OUTPUT_VIEW_DESC_0, D3D11_VIDEO_PROCESSOR_STREAM, D3D11_VPIV_DIMENSION_TEXTURE2D, D3D11_VPOV_DIMENSION_TEXTURE2D, D3D11CreateDevice, ID3D11Device, ID3D11DeviceContext, ID3D11Texture2D, ID3D11VideoContext, ID3D11VideoDevice, ID3D11VideoProcessor, ID3D11VideoProcessorEnumerator, ID3D11VideoProcessorInputView, ID3D11VideoProcessorOutputView};
@@ -26,8 +25,6 @@ pub struct VideoSourceD3d11<E: D3d11EncoderHwContext> {
     nv12_tex: ID3D11Texture2D,
 
     in_desc: DXGI_OUTDUPL_DESC,
-    in_width: u32,
-    in_height: u32,
 
     pub encoder_hw_ctx: E,
 }
@@ -65,8 +62,6 @@ impl<E: D3d11EncoderHwContext> VideoSourceD3d11<E> {
         let nv12_tex = nv12_tex.unwrap();
 
         let in_desc = unsafe { duplication.GetDesc() };
-        let in_width = in_desc.ModeDesc.Width;
-        let in_height = in_desc.ModeDesc.Height;
 
         Self {
             device,
@@ -80,8 +75,6 @@ impl<E: D3d11EncoderHwContext> VideoSourceD3d11<E> {
             nv12_tex,
 
             in_desc,
-            in_width,
-            in_height,
 
             encoder_hw_ctx,
         }
@@ -108,7 +101,7 @@ impl<E: D3d11EncoderHwContext> VideoSource for VideoSourceD3d11<E> {
                 self.device_tex = dxgi_resource.cast().unwrap();
 
                 self.nv12_tex = unsafe {
-                    convert_rgba_to_nv12(&self.device, &self.context, &self.device_tex, self.in_width, self.in_height, out_width, out_height).unwrap()
+                    convert_rgba_to_nv12(&self.device, &self.context, &self.device_tex, self.in_desc.ModeDesc.Width, self.in_desc.ModeDesc.Height, out_width, out_height).unwrap()
                 };
 
                 self.encoder_hw_ctx.prepare_frame(av_frame, &self.nv12_tex).unwrap();

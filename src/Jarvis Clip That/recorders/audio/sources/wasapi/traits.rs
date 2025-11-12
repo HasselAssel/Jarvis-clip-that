@@ -1,13 +1,14 @@
 use std::collections::VecDeque;
 use std::sync::{Arc, Mutex};
+
 use ffmpeg_next::{ChannelLayout, Codec};
 use ffmpeg_next::codec::Flags;
-use ffmpeg_next::encoder::audio::Encoder;
 use ffmpeg_next::encoder::audio;
+use ffmpeg_next::encoder::audio::Encoder;
 use ffmpeg_next::format::Sample;
-use ffmpeg_next::format::sample::Type;
 use ffmpeg_next::frame::Audio;
 use windows::Win32::Media::Audio::{IAudioCaptureClient, WAVEFORMATEX};
+
 use crate::ring_buffer::traits::PacketRingBuffer;
 use crate::types::Result;
 

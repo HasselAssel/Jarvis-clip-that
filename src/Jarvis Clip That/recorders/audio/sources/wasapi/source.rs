@@ -2,7 +2,7 @@ use std::collections::{HashMap, VecDeque};
 use std::sync::{Arc, Mutex};
 use ffmpeg_next::encoder::audio::Encoder;
 use ffmpeg_next::frame::Audio;
-use windows::Win32::Media::Audio::{AUDCLNT_SHAREMODE_SHARED, AUDCLNT_STREAMFLAGS_EVENTCALLBACK, AUDCLNT_STREAMFLAGS_LOOPBACK, PROCESS_LOOPBACK_MODE_EXCLUDE_TARGET_PROCESS_TREE, PROCESS_LOOPBACK_MODE_INCLUDE_TARGET_PROCESS_TREE, AUDIOCLIENT_PROCESS_LOOPBACK_PARAMS, AUDIOCLIENT_ACTIVATION_PARAMS_0, AUDIOCLIENT_ACTIVATION_TYPE_PROCESS_LOOPBACK, AUDIOCLIENT_ACTIVATION_PARAMS, eConsole, eRender, IAudioCaptureClient, IAudioClient, IMMDeviceEnumerator, MMDeviceEnumerator, WAVEFORMATEX, IAudioSessionManager2, eMultimedia, IAudioSessionControl2, WAVE_FORMAT_PCM, WAVEFORMATEXTENSIBLE, WAVEFORMATEXTENSIBLE_0, AudioSessionState, AudioSessionDisconnectReason, AudioSessionStateExpired, IAudioSessionControl, eCapture};
+use windows::Win32::Media::Audio::{AUDCLNT_SHAREMODE_SHARED, AUDCLNT_STREAMFLAGS_EVENTCALLBACK, AUDCLNT_STREAMFLAGS_LOOPBACK, PROCESS_LOOPBACK_MODE_EXCLUDE_TARGET_PROCESS_TREE, PROCESS_LOOPBACK_MODE_INCLUDE_TARGET_PROCESS_TREE, AUDIOCLIENT_PROCESS_LOOPBACK_PARAMS, AUDIOCLIENT_ACTIVATION_PARAMS_0, AUDIOCLIENT_ACTIVATION_TYPE_PROCESS_LOOPBACK, AUDIOCLIENT_ACTIVATION_PARAMS, eConsole, eRender, IAudioCaptureClient, IAudioClient, IMMDeviceEnumerator, MMDeviceEnumerator, WAVEFORMATEX, IAudioSessionManager2, eMultimedia, IAudioSessionControl2, WAVEFORMATEXTENSIBLE, WAVEFORMATEXTENSIBLE_0, AudioSessionState, AudioSessionDisconnectReason, AudioSessionStateExpired, eCapture};
 use windows::Win32::System::Com::{BLOB, CLSCTX_ALL, CoCreateInstance};
 use windows::Win32::System::Performance::{QueryPerformanceCounter, QueryPerformanceFrequency};
 use windows::Win32::System::Threading::{CreateEventW, INFINITE, WaitForSingleObject};
@@ -13,27 +13,22 @@ use std::{
     pin::Pin,
     sync::Condvar,
 };
-use std::future::Future;
-use std::io::Read;
 use std::ops::Deref;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
-use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
 use windows::Win32::Media::Audio as WinAudio;
 use windows::Win32::System::Variant::VT_BLOB;
 use windows::core::{Interface, HRESULT, IUnknown};
 use windows_core::{BOOL, GUID, PCWSTR};
-use crate::recorders::audio::audio_recorder::AudioRecorder;
+use crate::debug_println;
 use crate::recorders::audio::sources::enums::{AudioCodec, AudioSourceType};
 
 use crate::recorders::audio::sources::traits::AudioSource;
 use crate::recorders::audio::sources::wasapi::traits::WasapiEncoderCtx;
 use crate::recorders::recorder::{create_audio_recorder, Recorder};
-use crate::recorders::traits::TRecorder;
-use crate::ring_buffer::ring_buffer::RingBuffer;
 use crate::ring_buffer::traits::PacketRingBuffer;
 use crate::wrappers::{MaybeSafeComWrapper, MaybeSafeHANDLEWrapper};
-use crate::types::{Packet, RecorderJoinHandle, Result};
+use crate::types::Result;
 
 pub struct AudioSourceWasapi<E: WasapiEncoderCtx> {
     client: MaybeSafeComWrapper<IAudioClient>,
@@ -135,7 +130,7 @@ pub fn create_default_iaudioclient(render_else_capture: bool) -> Result<(IAudioC
         windows::Win32::System::Com::CoInitializeEx(None, windows::Win32::System::Com::COINIT_MULTITHREADED)
     };
     if try_init.is_err() {
-        println!("COM already co-initialized: {}", try_init)
+        debug_println!("COM already co-initialized: {}", try_init)
     }
 
     let enumerator: IMMDeviceEnumerator = unsafe {
@@ -183,25 +178,25 @@ pub fn create_default_iaudioclient(render_else_capture: bool) -> Result<(IAudioC
     let format = unsafe { *format };
 
     let f1 = format.wFormatTag;
-    println!("{}", f1);
+    debug_println!("{}", f1);
     let f1 = format.nChannels;
-    println!("{}", f1);
+    debug_println!("{}", f1);
     let f1 = format.nSamplesPerSec;
-    println!("{}", f1);
+    debug_println!("{}", f1);
     let f1 = format.nAvgBytesPerSec;
-    println!("{}", f1);
+    debug_println!("{}", f1);
     let f1 = format.nBlockAlign;
-    println!("{}", f1);
+    debug_println!("{}", f1);
     let f1 = format.wBitsPerSample;
-    println!("{}", f1);
+    debug_println!("{}", f1);
     let f1 = format.cbSize;
-    println!("{}", f1);
+    debug_println!("{}", f1);
 
     Ok((client, format))
 }
 
 fn create_process_iaudioclient(process_id: u32, include_tree: bool) -> Result<(IAudioClient, WAVEFORMATEX)> {
-    let try_init = unsafe {
+    let _try_init = unsafe {
         windows::Win32::System::Com::CoInitializeEx(None, windows::Win32::System::Com::COINIT_MULTITHREADED)
     };
 
@@ -356,7 +351,7 @@ impl<PRB: PacketRingBuffer + 'static> _AudioProcessWatcher<PRB> {
 
         let p_name = Self::get_process_name(p_id).unwrap_or("UNKNOWN???".into());
 
-        println!("Added: PID: {p_id}, {p_name}");
+        /*debug_println!*/eprintln!("Added: PID: {p_id}, {p_name}");
 
         let boo = Arc::new(AtomicBool::new(true));
         audio_recorders.insert(p_id, (recorder, p_name, boo));
@@ -377,7 +372,7 @@ impl<PRB: PacketRingBuffer + 'static> _AudioProcessWatcher<PRB> {
         let session_enum = unsafe { self.session_manager.GetSessionEnumerator()? };
         let count = unsafe { session_enum.GetCount()? };
 
-        println!("count: {count}");
+        debug_println!("count: {count}");
 
         for i in 0..count {
             let session_control = unsafe { session_enum.GetSession(i)? };
@@ -396,33 +391,31 @@ impl<PRB: PacketRingBuffer + 'static> _AudioProcessWatcher<PRB> {
 
         tokio::spawn(async move {
             while let Some(p_id) = add_process_rx.recv().await {
-                println!("innalock");
                 if let Some(_) = unsafe { self.try_add_new_process(p_id) }.await {
                     let mut audio_recorders = self.audio_recorders.lock().await;
                     if let Some((ref mut recorder, _, boo)) = audio_recorders.get_mut(&p_id) {
                         recorder.start_recording(Some(boo.clone()));
                     } else {
-                        println!("Recorder removed again :(")
+                        debug_println!("Recorder removed again :(")
                     }
                 }
             }
-            println!("DONT");
         });
 
         tokio::spawn(async move {
-            let mut audio_recorders = audio_recorders;
-            let mut r_session_events = r_session_events;
+            let audio_recorders = audio_recorders;
+            let r_session_events = r_session_events;
             while let Some(p_id) = remove_process_rx.recv().await {
-                let mut audio_recorders = audio_recorders.clone();
-                let mut r_session_events = r_session_events.clone();
+                let audio_recorders = audio_recorders.clone();
+                let r_session_events = r_session_events.clone();
                 tokio::spawn(async move {
                     tokio::time::sleep(Duration::from_secs(min_secs as u64)).await;
                     let mut audio_recorders = audio_recorders.lock().await;
                     if let Some((_, _, boo)) = audio_recorders.remove(&p_id) {
                         boo.store(false, Ordering::Relaxed);
-                        println!("removed process {p_id}");
+                        /*debug_println!*/eprintln!("removed process {p_id}");
                     } else {
-                        println!("did NOT removed process {p_id}");
+                        debug_println!("did NOT removed process {p_id}");
                     }
 
                     let mut r_session_events = r_session_events.lock().unwrap();
@@ -470,11 +463,10 @@ struct SessionNotification {
 impl WinAudio::IAudioSessionNotification_Impl for SessionNotification_Impl {
     fn OnSessionCreated(&self, newsession: windows::core::Ref<'_, WinAudio::IAudioSessionControl>) -> windows_core::Result<()> {
         if let Some(new_session) = newsession.as_ref() {
-            let session_control: IAudioSessionControl = new_session.cast()?;
             let new_session2: IAudioSessionControl2 = new_session.cast()?;
             let p_id = unsafe { new_session2.GetProcessId()? };
 
-            println!("OnSessionCreated NEW P_ID: {}", p_id);
+            debug_println!("OnSessionCreated NEW P_ID: {}", p_id);
 
             let tx = self._remove_process_tx.clone();
             let session_events: WinAudio::IAudioSessionEvents = SessionEvents { p_id, tx }.into();
@@ -496,41 +488,41 @@ pub struct SessionEvents {
 
 impl WinAudio::IAudioSessionEvents_Impl for SessionEvents_Impl {
     fn OnStateChanged(&self, newstate: AudioSessionState) -> windows_core::Result<()> {
-        println!("OnStateChanged, p_id: {}", self.p_id);
+        debug_println!("OnStateChanged, p_id: {}", self.p_id);
         if newstate == AudioSessionStateExpired {
             let _ = self.tx.send(self.p_id);
         }
         Ok(())
     }
 
-    fn OnSessionDisconnected(&self, disconnectreason: AudioSessionDisconnectReason) -> windows_core::Result<()> {
-        println!("OnSessionDisconnected, p_id: {}", self.p_id);
+    fn OnSessionDisconnected(&self, _disconnectreason: AudioSessionDisconnectReason) -> windows_core::Result<()> {
+        debug_println!("OnSessionDisconnected, p_id: {}", self.p_id);
         let _ = self.tx.send(self.p_id);
         Ok(())
     }
 
-    fn OnDisplayNameChanged(&self, newdisplayname: &PCWSTR, eventcontext: *const GUID) -> windows_core::Result<()> {
-        println!("OnDisplayNameChanged, p_id: {}", self.p_id);
+    fn OnDisplayNameChanged(&self, _newdisplayname: &PCWSTR, _eventcontext: *const GUID) -> windows_core::Result<()> {
+        debug_println!("OnDisplayNameChanged, p_id: {}", self.p_id);
         Ok(())
     }
 
-    fn OnGroupingParamChanged(&self, newgroupingparam: *const GUID, eventcontext: *const GUID) -> windows_core::Result<()> {
-        println!("OnGroupingParamChanged, p_id: {}", self.p_id);
+    fn OnGroupingParamChanged(&self, _newgroupingparam: *const GUID, _eventcontext: *const GUID) -> windows_core::Result<()> {
+        debug_println!("OnGroupingParamChanged, p_id: {}", self.p_id);
         Ok(())
     }
 
-    fn OnIconPathChanged(&self, newiconpath: &PCWSTR, eventcontext: *const GUID) -> windows_core::Result<()> {
-        println!("OnIconPathChanged, p_id: {}", self.p_id);
+    fn OnIconPathChanged(&self, _newiconpath: &PCWSTR, _eventcontext: *const GUID) -> windows_core::Result<()> {
+        debug_println!("OnIconPathChanged, p_id: {}", self.p_id);
         Ok(())
     }
 
-    fn OnSimpleVolumeChanged(&self, newvolume: f32, newmute: BOOL, eventcontext: *const GUID) -> windows_core::Result<()> {
-        println!("OnSimpleVolumeChanged, p_id: {}", self.p_id);
+    fn OnSimpleVolumeChanged(&self, _newvolume: f32, _newmute: BOOL, _eventcontext: *const GUID) -> windows_core::Result<()> {
+        debug_println!("OnSimpleVolumeChanged, p_id: {}", self.p_id);
         Ok(())
     }
 
-    fn OnChannelVolumeChanged(&self, channelcount: u32, newchannelvolumearray: *const f32, changedchannel: u32, eventcontext: *const GUID) -> windows_core::Result<()> {
-        println!("OnChannelVolumeChanged, p_id: {}", self.p_id);
+    fn OnChannelVolumeChanged(&self, _channelcount: u32, _newchannelvolumearray: *const f32, _changedchannel: u32, _eventcontext: *const GUID) -> windows_core::Result<()> {
+        debug_println!("OnChannelVolumeChanged, p_id: {}", self.p_id);
         Ok(())
     }
 }
@@ -593,7 +585,7 @@ struct Handler {
 
 #[allow(non_snake_case)]
 impl WinAudio::IActivateAudioInterfaceCompletionHandler_Impl for Handler_Impl {
-    fn ActivateCompleted(&self, operation: windows::core::Ref<'_, WinAudio::IActivateAudioInterfaceAsyncOperation>) -> windows::core::Result<()> {
+    fn ActivateCompleted(&self, _operation: windows::core::Ref<'_, WinAudio::IActivateAudioInterfaceAsyncOperation>) -> windows::core::Result<()> {
         let (lock, cvar) = &*self.pair;
         let mut guard = lock.lock().unwrap();
         *guard = true;

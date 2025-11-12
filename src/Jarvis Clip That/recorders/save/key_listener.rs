@@ -1,7 +1,6 @@
 use std::collections::HashSet;
 use std::sync::{Arc, Mutex};
 use std::thread;
-use std::thread::JoinHandle;
 
 use rdev::{Event, EventType, Key, listen};
 

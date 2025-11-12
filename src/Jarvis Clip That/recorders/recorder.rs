@@ -1,27 +1,27 @@
 use std::sync::{Arc, Mutex};
 use std::sync::atomic::AtomicBool;
+
 use ffmpeg_next::ChannelLayout;
 use ffmpeg_next::codec::Parameters;
-
 use ffmpeg_next::encoder::find_by_name;
 use ffmpeg_next::format::Sample;
 use ffmpeg_next::format::sample::Type;
 use ffmpeg_next::sys::AVPixelFormat::{AV_PIX_FMT_D3D11, AV_PIX_FMT_QSV};
+
 use crate::error::Error::Unknown;
 use crate::recorders::audio::audio_recorder::AudioRecorder;
 use crate::recorders::audio::sources::enums::{AudioCodec, AudioSourceType};
 use crate::recorders::audio::sources::wasapi::aac::{AAC_FRAME_SIZE, AacContext};
-use crate::recorders::audio::sources::wasapi::source::{AudioProcessWatcher, AudioSourceWasapi};
+use crate::recorders::audio::sources::wasapi::source::AudioSourceWasapi;
 use crate::recorders::audio::sources::wasapi::traits::new_audio_encoder_aac;
-
 use crate::recorders::frame::{create_audio_frames, create_av_frame};
 use crate::recorders::traits::TRecorder;
-use crate::recorders::video::video_recorder::VideoRecorder;
 use crate::recorders::video::sources::d3d111::d3d11av::D3d11vaAdapter;
 use crate::recorders::video::sources::d3d111::qsv::QsvAdapter;
 use crate::recorders::video::sources::d3d111::source::VideoSourceD3d11;
 use crate::recorders::video::sources::d3d111::traits::{create_encoder_d3d11, D3d11EncoderHwContext};
 use crate::recorders::video::sources::enums::{VideoCodec, VideoSourceType};
+use crate::recorders::video::video_recorder::VideoRecorder;
 use crate::ring_buffer::traits::PacketRingBuffer;
 use crate::types::{RecorderJoinHandle, Result};
 use crate::wrappers::MaybeSafeFFIPtrWrapper;
@@ -64,7 +64,7 @@ pub fn create_video_recorder<PRB: PacketRingBuffer + 'static>(video_source_type:
         VideoCodec::Qsv => { return Err(ffmpeg_next::Error::EncoderNotFound.into()); }
     };
     let ctx = ffmpeg_next::codec::context::Context::new_with_codec(codec);
-    let mut enc = ctx.encoder().video().unwrap();
+    let enc = ctx.encoder().video().unwrap();
 
     let idk = match video_source_type {
         VideoSourceType::D3d11 { monitor_id } => {
@@ -89,9 +89,6 @@ pub fn create_video_recorder<PRB: PacketRingBuffer + 'static>(video_source_type:
                 }
             }
         }
-        VideoSourceType::TEST => {
-            todo!()
-        }
     };
     Ok(idk)
 }
@@ -105,10 +102,10 @@ pub fn create_audio_recorder<PRB: PacketRingBuffer + 'static>(audio_source_type:
 
     let codec = match audio_code_c {
         AudioCodec::AAC => { ffmpeg_next::codec::encoder::find(ffmpeg_next::codec::Id::AAC).ok_or(ffmpeg_next::Error::EncoderNotFound)? }
-        AudioCodec::Test => { return Err(ffmpeg_next::Error::EncoderNotFound.into()); }
+        //AudioCodec::Test => { return Err(ffmpeg_next::Error::EncoderNotFound.into()); }
     };
     let ctx = ffmpeg_next::codec::context::Context::new_with_codec(codec);
-    let mut enc = ctx.encoder().audio().unwrap();
+    let enc = ctx.encoder().audio().unwrap();
 
     let idk = match audio_source_type {
         AudioSourceType::WasApiDefaultSys | AudioSourceType::WasApiDefaultInput => {
@@ -134,9 +131,6 @@ pub fn create_audio_recorder<PRB: PacketRingBuffer + 'static>(audio_source_type:
                     let recorder = AudioRecorder::new(arc_ring_buffer.clone(), aac_vs, encoder, frame, silent_frame);
                     Recorder::from_recorder(recorder, arc_ring_buffer, parameters)
                 }
-                AudioCodec::Test => {
-                    todo!()
-                }
             }
         }
         AudioSourceType::WasApiProcess { process_id, include_tree } => {
@@ -155,9 +149,6 @@ pub fn create_audio_recorder<PRB: PacketRingBuffer + 'static>(audio_source_type:
                     let arc_ring_buffer = create_ring_buffer(aac_vs.format.nSamplesPerSec);
                     let recorder = AudioRecorder::new(arc_ring_buffer.clone(), aac_vs, encoder, frame, silent_frame);
                     Recorder::from_recorder(recorder, arc_ring_buffer, parameters)
-                }
-                AudioCodec::Test => {
-                    todo!()
                 }
             }
         }

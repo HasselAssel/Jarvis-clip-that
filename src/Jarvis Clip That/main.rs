@@ -1,6 +1,3 @@
-use std::thread;
-use std::time::Duration;
-use rand::TryRngCore;
 use rdev::Key;
 use crate::recorders::audio::sources::enums::{AudioCodec, AudioSourceType};
 use crate::recorders::audio::sources::wasapi::source::AudioProcessWatcher;
@@ -17,7 +14,8 @@ mod types;
 mod wrappers;
 mod ring_buffer;
 mod recorders;
-mod egui;
+#[path = "../shared_macros.rs"]
+mod shared_macros;
 
 #[tokio::main]
 async fn main() {
@@ -43,7 +41,7 @@ async fn main_sync() {
     let mut audio_recorder = AudioProcessWatcher::<AudioPacketRingBufferType>::new(audio_codec, true, seconds);
 
 
-    let save_env = SaverEnv::new("out", "Chat Clip That");
+    let save_env = SaverEnv::new("out", "Chat Clip That", Some("sounds/BOOM.mp3"));
 
 
     let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<()>();
@@ -51,7 +49,7 @@ async fn main_sync() {
 
     let mut key_listener = KeyListener::new();
     key_listener.register_shortcut(&[Key::Alt, Key::KeyM], move || {
-        println!("OK GARMIN VIDEO SPEICHERN");
+        debug_println!("OK GARMIN VIDEO SPEICHERN");
         tx.send(()).unwrap();
     });
 
@@ -71,7 +69,7 @@ async fn main_sync() {
                 save.add_stream(&audio_recorder_input.ring_buffer, &audio_recorder_input.parameters, false).unwrap();
 
                 for (p_id, (recorder, _, _)) in audio_recorder.audio_recorders.lock().await.iter() {
-                    println!("stream added for: {}", p_id);
+                    debug_println!("stream added for: {}", p_id);
                     save.add_stream(&recorder.ring_buffer, &recorder.parameters, false).unwrap();
                 }
 

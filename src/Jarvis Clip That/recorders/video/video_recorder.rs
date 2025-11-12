@@ -44,7 +44,7 @@ impl<PRB: PacketRingBuffer, VS: VideoSource + Send> VideoRecorder<PRB, VS> {
 
 impl<PRB: PacketRingBuffer, VS: VideoSource + Send> TRecorder<PRB> for VideoRecorder<PRB, VS> {
     fn start_capturing(mut self: Box<Self>, stop_capturing_callback: Option<Arc<AtomicBool>>) -> JoinHandle<Result<()>> {
-        fn help<PRB: PacketRingBuffer, VS: VideoSource + Send>(mut selbst: &mut Box<VideoRecorder<PRB, VS>>, frame: &mut Video, frame_duration: &Duration, mut elapsed: &mut Duration, expected_elapsed: &mut Duration, mut start_time: &mut Instant, mut total_frames_counter: &mut i64) {
+        fn help<PRB: PacketRingBuffer, VS: VideoSource + Send>(selbst: &mut Box<VideoRecorder<PRB, VS>>, frame: &mut Video, frame_duration: &Duration, elapsed: &mut Duration, expected_elapsed: &mut Duration, start_time: &mut Instant, total_frames_counter: &mut i64) {
             *start_time = Instant::now();
 
             for i in 0..u32::MAX {
@@ -87,7 +87,6 @@ impl<PRB: PacketRingBuffer, VS: VideoSource + Send> TRecorder<PRB> for VideoReco
                 loop {
                     help(&mut self, &mut frame, &frame_duration, &mut elapsed, &mut expected_elapsed, &mut start_time, &mut total_frames_counter);
                 }
-                Ok(())
             }
         })
     }

@@ -1,11 +1,9 @@
-use std::sync::{Arc, Condvar, Mutex};
+use std::sync::{Arc, Mutex};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread;
 
 use ffmpeg_next::encoder::audio::Encoder;
 use ffmpeg_next::util::frame::audio::Audio;
-use windows::Win32::Media::Audio::{eMultimedia, eRender, IAudioSessionControl2, IAudioSessionManager2, IMMDeviceEnumerator, MMDeviceEnumerator};
-use windows::Win32::System::Com::{CLSCTX_ALL, CoCreateInstance};
 
 use crate::recorders::audio::sources::traits::AudioSource;
 use crate::recorders::traits::TRecorder;
@@ -54,7 +52,6 @@ impl<PRB: PacketRingBuffer, AS: AudioSource + Send> TRecorder<PRB> for AudioReco
                 loop {
                     help(&mut self);
                 }
-                Ok(())
             }
         })
     }

@@ -8,11 +8,7 @@ edition = "2021"
 [dependencies]
 tokio = { version = "1.44.2", features = ["rt", "rt-multi-thread", "macros", "sync", "time"] }
 
-rand = "0.9.1"
-crossbeam = "0.8.4"
-
 windows = { version = "0.61.0", features = ["Win32_Graphics_Dxgi", "Win32_Graphics_Direct3D11", "Win32_Graphics_Direct3D", "Win32_System", "Win32_System_Threading", "Win32_Graphics_Dxgi_Common", "Win32_System_LibraryLoader", "Win32_Graphics_Gdi", "Win32_System_Memory", "Win32_System_Com", "Win32_Media", "Win32_Media_Audio", "Win32_System_Com_StructuredStorage", "Win32_System_Variant", "Win32_Security", "Win32_System_Performance", "Win32_System_Diagnostics", "Win32_System_Diagnostics_ToolHelp", "Graphics_Capture", "Graphics_DirectX_Direct3D11", "Win32_UI", "Graphics_Imaging", "Win32_UI_WindowsAndMessaging", "Win32_Storage", "Win32_Storage_Xps", "Win32_Media_KernelStreaming", "Win32_Media_Multimedia"] }
-wasapi = "0.17.0"
 windows-core = "0.61.0"
 
 ffmpeg-next = { version = "7.1.0", default-features = false, features = ["codec", "format", "software-scaling"] }
@@ -23,16 +19,17 @@ chrono = "0.4.41"
 
 rodio = "0.20.1"
 
-eframe = "0.31.1"
+eframe = { version = "0.31.1", features = ["wgpu"] }
+egui-wgpu = "0.31.1"
 
-cpal = "0.15.3"
 log = "0.4.25"
 image = "0.25.6"
 
 [[bin]]
-name = "Jarvis-clip-that"
-path = "src/main.rs"
+name = "jarvis-clip-that"
+path = "src/Jarvis Clip That/main.rs"
 
 [[bin]]
-name = "Egui"
-path = "src/egui/egui.rs"
+name = "clip-editor"
+path = "src/Clip Editor/main.rs"
+

@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use crate::debug_println;
 
 pub struct Media {
     pub streams: HashMap<usize, Stream>,
@@ -24,12 +25,12 @@ impl Media {
         let mut ictx = ffmpeg_next::format::input(input_path).unwrap();
 
         let mut streams = ictx.streams().into_iter().map(|stream| (stream.index(), Stream { stream_index: stream.index(), parameters: stream.parameters(), packet_headers: Vec::new() })).collect::<HashMap<_, _>>();
-        ictx.streams().for_each(|stream| println!("stream {}", stream.index()));
+        ictx.streams().for_each(|stream| debug_println!("stream {}", stream.index()));
 
         for (i, (stream, packet)) in ictx.packets().enumerate() {
             let index = stream.index();
             if let Some(stream) = streams.get_mut(&index) {
-                //println!("stream id {}, dts {:?}, pts {:?}", stream.stream_index, packet.pts().unwrap(), packet.dts().unwrap());
+                debug_println!("stream id {}, dts {:?}, pts {:?}", stream.stream_index, packet.pts().unwrap(), packet.dts().unwrap());
                 stream.packet_headers.push(PacketIndex {
                     pts: packet.pts(),
                     dts: packet.dts(),
@@ -46,15 +47,5 @@ impl Media {
             streams,
             ictx,
         }
-    }
-
-    pub fn dummy(&mut self) {
-        println!("{}", self.streams.len())
-    }
-}
-
-impl Stream {
-    pub fn decode(&self) {
-
     }
 }

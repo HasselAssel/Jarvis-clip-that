@@ -1,15 +1,15 @@
-use std::ptr::null_mut;
 use ffmpeg_next::ChannelLayout;
 use ffmpeg_next::format::Sample;
 use ffmpeg_next::frame::Audio;
 
 use ffmpeg_next::sys::{av_buffer_ref, av_frame_alloc, av_hwframe_get_buffer, AVBufferRef, AVFrame, AVPixelFormat};
+use crate::debug_println;
 
 use crate::error::Error::Unknown;
 use crate::types::Result;
 
 pub fn create_av_frame(format: AVPixelFormat, width: i32, height: i32, hw_frame_ctx: *mut AVBufferRef) -> Result<*mut AVFrame> {
-    let mut av_frame = null_mut();
+    let av_frame;
     unsafe {
         av_frame = av_frame_alloc();
         (*av_frame).format = format as i32; // AV_PIX_FMT_D3D11 as i32;
@@ -39,7 +39,7 @@ pub fn create_audio_frames(format: Sample, size: usize, layout: ChannelLayout) -
         layout,
     );
     let buf = vec![0u8; size * silent_frame.format().bytes() * silent_frame.channels() as usize];
-    println!("SIZE: {}",size * silent_frame.format().bytes() * silent_frame.channels() as usize);
+    debug_println!("SIZE: {}",size * silent_frame.format().bytes() * silent_frame.channels() as usize);
     unsafe { copy_into_audio_frame(&mut silent_frame, buf); }
 
     (frame, silent_frame)
