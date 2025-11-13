@@ -33,12 +33,20 @@ pub struct Recorder<PRB: PacketRingBuffer> {
 }
 
 impl<PRB: PacketRingBuffer> Recorder<PRB> {
-    fn from_recorder<R: TRecorder<PRB> + 'static + Send>(recorder: R, ring_buffer: Arc<Mutex<PRB>>, parameters: Parameters) -> Self {
+    fn from_recorder<R: TRecorder<PRB> + 'static + Send>(
+        recorder: R,
+        ring_buffer: Arc<Mutex<PRB>>,
+        parameters: Parameters,
+    ) -> Self {
         let recorder = Box::new(recorder);
         Self::from_boxed_recorder(recorder, ring_buffer, parameters)
     }
 
-    fn from_boxed_recorder(recorder: Box<dyn TRecorder<PRB> + Send>, ring_buffer: Arc<Mutex<PRB>>, parameters: Parameters) -> Self {
+    fn from_boxed_recorder(
+        recorder: Box<dyn TRecorder<PRB> + Send>,
+        ring_buffer: Arc<Mutex<PRB>>,
+        parameters: Parameters,
+    ) -> Self {
         let recorder = Some(recorder);
         Self {
             recorder,
@@ -47,7 +55,10 @@ impl<PRB: PacketRingBuffer> Recorder<PRB> {
         }
     }
 
-    pub fn start_recording(&mut self, stop_capturing_callback: Option<Arc<AtomicBool>>) -> Option<RecorderJoinHandle> {
+    pub fn start_recording(
+        &mut self,
+        stop_capturing_callback: Option<Arc<AtomicBool>>,
+    ) -> Option<RecorderJoinHandle> {
         self.recorder.take().map(|recorder| {
             recorder.start_capturing(stop_capturing_callback)
         })
@@ -55,7 +66,14 @@ impl<PRB: PacketRingBuffer> Recorder<PRB> {
 }
 
 
-pub fn create_video_recorder<PRB: PacketRingBuffer + 'static>(video_source_type: &VideoSourceType, video_codec: &VideoCodec, min_secs: u32, width: u32, height: u32, fps: i32) -> Result<Recorder<PRB>> {
+pub fn create_video_recorder<PRB: PacketRingBuffer + 'static>(
+    video_source_type: &VideoSourceType,
+    video_codec: &VideoCodec,
+    min_secs: u32,
+    width: u32,
+    height: u32,
+    fps: i32,
+) -> Result<Recorder<PRB>> {
     let ring_buffer = PRB::new(min_secs * fps as u32);
     let arc_ring_buffer = Arc::new(Mutex::new(ring_buffer));
 
@@ -64,14 +82,14 @@ pub fn create_video_recorder<PRB: PacketRingBuffer + 'static>(video_source_type:
         VideoCodec::Qsv => { return Err(ffmpeg_next::Error::EncoderNotFound.into()); }
     };
     let ctx = ffmpeg_next::codec::context::Context::new_with_codec(codec);
-    let enc = ctx.encoder().video().unwrap();
+    let enc = ctx.encoder().video()?;
 
     let idk = match video_source_type {
         VideoSourceType::D3d11 { monitor_id } => {
             match video_codec {
                 VideoCodec::Amf => {
-                    let d3d11_vs = VideoSourceD3d11::new(*monitor_id, D3d11vaAdapter);
-                    let (hw_device_ctx, hw_frame_ctx) = d3d11_vs.encoder_hw_ctx.setup_hw_and_frame_ctx(&d3d11_vs.device, width as i32, height as i32).unwrap();
+                    let d3d11_vs = VideoSourceD3d11::new(*monitor_id, D3d11vaAdapter)?;
+                    let (hw_device_ctx, hw_frame_ctx) = d3d11_vs.encoder_hw_ctx.setup_hw_and_frame_ctx(&d3d11_vs.device, width as i32, height as i32)?;
                     let encoder = create_encoder_d3d11(enc, codec, (hw_device_ctx, hw_frame_ctx), width, height, fps)?;
                     let parameters = Parameters::from(&encoder);
                     let av_frame = create_av_frame(AV_PIX_FMT_D3D11, width as i32, height as i32, hw_frame_ctx)?;
@@ -79,8 +97,8 @@ pub fn create_video_recorder<PRB: PacketRingBuffer + 'static>(video_source_type:
                     Recorder::from_recorder(recorder, arc_ring_buffer, parameters)
                 }
                 VideoCodec::Qsv => {
-                    let d3d11_vs = VideoSourceD3d11::new(*monitor_id, QsvAdapter);
-                    let (hw_device_ctx, hw_frame_ctx) = d3d11_vs.encoder_hw_ctx.setup_hw_and_frame_ctx(&d3d11_vs.device, width as i32, height as i32).unwrap();
+                    let d3d11_vs = VideoSourceD3d11::new(*monitor_id, QsvAdapter)?;
+                    let (hw_device_ctx, hw_frame_ctx) = d3d11_vs.encoder_hw_ctx.setup_hw_and_frame_ctx(&d3d11_vs.device, width as i32, height as i32)?;
                     let encoder = create_encoder_d3d11(enc, codec, (hw_device_ctx, hw_frame_ctx), width, height, fps)?;
                     let parameters = Parameters::from(&encoder);
                     let av_frame = create_av_frame(AV_PIX_FMT_QSV, width as i32, height as i32, hw_frame_ctx)?;
@@ -94,7 +112,11 @@ pub fn create_video_recorder<PRB: PacketRingBuffer + 'static>(video_source_type:
 }
 
 
-pub fn create_audio_recorder<PRB: PacketRingBuffer + 'static>(audio_source_type: &AudioSourceType, audio_code_c: &AudioCodec, min_secs: u32) -> Result<Recorder<PRB>> {
+pub fn create_audio_recorder<PRB: PacketRingBuffer + 'static>(
+    audio_source_type: &AudioSourceType,
+    audio_code_c: &AudioCodec,
+    min_secs: u32,
+) -> Result<Recorder<PRB>> {
     let create_ring_buffer = |rate| -> Arc<Mutex<PRB>>{
         let ring_buffer = PRB::new(min_secs * rate);
         Arc::new(Mutex::new(ring_buffer))
@@ -105,7 +127,7 @@ pub fn create_audio_recorder<PRB: PacketRingBuffer + 'static>(audio_source_type:
         //AudioCodec::Test => { return Err(ffmpeg_next::Error::EncoderNotFound.into()); }
     };
     let ctx = ffmpeg_next::codec::context::Context::new_with_codec(codec);
-    let enc = ctx.encoder().audio().unwrap();
+    let enc = ctx.encoder().audio()?;
 
     let idk = match audio_source_type {
         AudioSourceType::WasApiDefaultSys | AudioSourceType::WasApiDefaultInput => {

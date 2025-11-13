@@ -1,17 +1,19 @@
-use std::mem::{ManuallyDrop, MaybeUninit};
+use std::mem::ManuallyDrop;
 use std::ptr::null_mut;
+
 use ffmpeg_next::ffi::AVFrame;
 use windows::core::Interface;
 use windows::Win32::Foundation::{HMODULE, TRUE};
-use windows::Win32::Graphics::Direct3D11::{D3D11_BIND_RENDER_TARGET, D3D11_BIND_SHADER_RESOURCE, D3D11_CREATE_DEVICE_BGRA_SUPPORT, D3D11_SDK_VERSION, D3D11_TEX2D_VPIV, D3D11_TEX2D_VPOV, D3D11_TEXTURE2D_DESC, D3D11_USAGE_DEFAULT, D3D11_VIDEO_FRAME_FORMAT_PROGRESSIVE, D3D11_VIDEO_PROCESSOR_CONTENT_DESC, D3D11_VIDEO_PROCESSOR_INPUT_VIEW_DESC, D3D11_VIDEO_PROCESSOR_INPUT_VIEW_DESC_0, D3D11_VIDEO_PROCESSOR_OUTPUT_VIEW_DESC, D3D11_VIDEO_PROCESSOR_OUTPUT_VIEW_DESC_0, D3D11_VIDEO_PROCESSOR_STREAM, D3D11_VPIV_DIMENSION_TEXTURE2D, D3D11_VPOV_DIMENSION_TEXTURE2D, D3D11CreateDevice, ID3D11Device, ID3D11DeviceContext, ID3D11Texture2D, ID3D11VideoContext, ID3D11VideoDevice, ID3D11VideoProcessor, ID3D11VideoProcessorEnumerator, ID3D11VideoProcessorInputView, ID3D11VideoProcessorOutputView};
 use windows::Win32::Graphics::Direct3D::{D3D_DRIVER_TYPE_HARDWARE, D3D_FEATURE_LEVEL_10_0, D3D_FEATURE_LEVEL_11_0};
+use windows::Win32::Graphics::Direct3D11::{D3D11_BIND_RENDER_TARGET, D3D11_BIND_SHADER_RESOURCE, D3D11_CREATE_DEVICE_BGRA_SUPPORT, D3D11_SDK_VERSION, D3D11_TEX2D_VPIV, D3D11_TEX2D_VPOV, D3D11_TEXTURE2D_DESC, D3D11_USAGE_DEFAULT, D3D11_VIDEO_FRAME_FORMAT_PROGRESSIVE, D3D11_VIDEO_PROCESSOR_CONTENT_DESC, D3D11_VIDEO_PROCESSOR_INPUT_VIEW_DESC, D3D11_VIDEO_PROCESSOR_INPUT_VIEW_DESC_0, D3D11_VIDEO_PROCESSOR_OUTPUT_VIEW_DESC, D3D11_VIDEO_PROCESSOR_OUTPUT_VIEW_DESC_0, D3D11_VIDEO_PROCESSOR_STREAM, D3D11_VPIV_DIMENSION_TEXTURE2D, D3D11_VPOV_DIMENSION_TEXTURE2D, D3D11CreateDevice, ID3D11Device, ID3D11DeviceContext, ID3D11Texture2D, ID3D11VideoContext, ID3D11VideoDevice, ID3D11VideoProcessor, ID3D11VideoProcessorEnumerator, ID3D11VideoProcessorInputView, ID3D11VideoProcessorOutputView};
 use windows::Win32::Graphics::Dxgi::{DXGI_OUTDUPL_DESC, DXGI_OUTDUPL_FRAME_INFO, IDXGIAdapter, IDXGIDevice, IDXGIOutput, IDXGIOutput1, IDXGIOutputDuplication, IDXGIResource};
 use windows::Win32::Graphics::Dxgi::Common::{DXGI_FORMAT_B8G8R8A8_UNORM, DXGI_FORMAT_NV12, DXGI_FORMAT_R8G8B8A8_UNORM, DXGI_SAMPLE_DESC};
-use crate::error::Error::Unknown;
+
+use crate::error::{CustomError, Error};
 use crate::recorders::video::sources::d3d111::traits::D3d11EncoderHwContext;
 use crate::recorders::video::sources::traits::VideoSource;
-use crate::wrappers::MaybeSafeFFIPtrWrapper;
 use crate::types::Result;
+use crate::wrappers::MaybeSafeFFIPtrWrapper;
 
 pub struct VideoSourceD3d11<E: D3d11EncoderHwContext> {
     pub device: ID3D11Device,
@@ -19,7 +21,6 @@ pub struct VideoSourceD3d11<E: D3d11EncoderHwContext> {
     duplication: IDXGIOutputDuplication,
 
     resource: Option<IDXGIResource>,
-    hr: windows::core::Result<()>,
     frame_info: DXGI_OUTDUPL_FRAME_INFO,
     device_tex: ID3D11Texture2D,
     nv12_tex: ID3D11Texture2D,
@@ -30,11 +31,13 @@ pub struct VideoSourceD3d11<E: D3d11EncoderHwContext> {
 }
 
 impl<E: D3d11EncoderHwContext> VideoSourceD3d11<E> {
-    pub fn new(monitor: u32, encoder_hw_ctx: E) -> Self {
-        let (device, context, duplication) = create_id3d11(monitor).unwrap();
+    pub fn new(
+        monitor: u32,
+        encoder_hw_ctx: E,
+    ) -> Result<Self> {
+        let (device, context, duplication) = create_id3d11(monitor)?;
 
         let resource = None;
-        let hr = unsafe { MaybeUninit::zeroed().assume_init() };
         let frame_info = DXGI_OUTDUPL_FRAME_INFO::default();
 
         let dummy_desc = D3D11_TEXTURE2D_DESC {
@@ -54,22 +57,21 @@ impl<E: D3d11EncoderHwContext> VideoSourceD3d11<E> {
         let mut nv12_tex = None;
 
         unsafe {
-            device.CreateTexture2D(&dummy_desc, Some(null_mut()), Some(&mut device_tex)).unwrap();
-            device.CreateTexture2D(&dummy_desc, Some(null_mut()), Some(&mut nv12_tex)).unwrap();
+            device.CreateTexture2D(&dummy_desc, Some(null_mut()), Some(&mut device_tex))?;
+            device.CreateTexture2D(&dummy_desc, Some(null_mut()), Some(&mut nv12_tex))?;
         }
 
-        let device_tex = device_tex.unwrap();
-        let nv12_tex = nv12_tex.unwrap();
+        let device_tex = device_tex.ok_or(CustomError::CUSTOM(Error::Unknown))?;
+        let nv12_tex = nv12_tex.ok_or(CustomError::CUSTOM(Error::Unknown))?;
 
         let in_desc = unsafe { duplication.GetDesc() };
 
-        Self {
+        Ok(Self {
             device,
             context,
             duplication,
 
             resource,
-            hr,
             frame_info,
             device_tex,
             nv12_tex,
@@ -77,34 +79,38 @@ impl<E: D3d11EncoderHwContext> VideoSourceD3d11<E> {
             in_desc,
 
             encoder_hw_ctx,
-        }
+        })
     }
 }
 
 impl<E: D3d11EncoderHwContext> VideoSource for VideoSourceD3d11<E> {
-    fn init(&mut self) {
-    }
+    fn init(&mut self) -> Result<()> { Ok(()) }
 
-    fn get_frame(&mut self, av_frame: &MaybeSafeFFIPtrWrapper<AVFrame>, out_width: u32, out_height: u32) -> std::result::Result<(), String> {
+    fn get_frame(
+        &mut self,
+        av_frame: &MaybeSafeFFIPtrWrapper<AVFrame>,
+        out_width: u32,
+        out_height: u32,
+    ) -> Result<()> {
         // TODO: Fix First Frame always being Green (for some reason the first duplication.AcquireNextFrame call generates no IDXGIResource)
 
         self.resource = None;
 
-        unsafe { self.hr = self.duplication.AcquireNextFrame(0, &mut self.frame_info, &mut self.resource); }
+        let hr = unsafe { self.duplication.AcquireNextFrame(0, &mut self.frame_info, &mut self.resource) };
 
-        if self.hr.is_err() {
-            return Err(format!("IDXGIOutputDuplication::AcquireNextFrame returned Error value: {:?}", self.hr));
+        if hr.is_err() {
+            return Err(CustomError::CUSTOM(Error::Unknown));//format!("IDXGIOutputDuplication::AcquireNextFrame returned Error value: {:?}", self.hr)
         }
 
         if let Some(dxgi_resource) = &self.resource {
             if self.frame_info.AccumulatedFrames != 0 {
-                self.device_tex = dxgi_resource.cast().unwrap();
+                self.device_tex = dxgi_resource.cast()?;
 
                 self.nv12_tex = unsafe {
-                    convert_rgba_to_nv12(&self.device, &self.context, &self.device_tex, self.in_desc.ModeDesc.Width, self.in_desc.ModeDesc.Height, out_width, out_height).unwrap()
+                    convert_rgba_to_nv12(&self.device, &self.context, &self.device_tex, self.in_desc.ModeDesc.Width, self.in_desc.ModeDesc.Height, out_width, out_height)?
                 };
 
-                self.encoder_hw_ctx.prepare_frame(av_frame, &self.nv12_tex).unwrap();
+                self.encoder_hw_ctx.prepare_frame(av_frame, &self.nv12_tex)?;
             }
         }
 
@@ -131,8 +137,8 @@ fn create_id3d11(monitor: u32) -> Result<(ID3D11Device, ID3D11DeviceContext, IDX
             Some(&mut context),
         )?;
     }
-    let device: ID3D11Device = device.ok_or(Unknown)?;
-    let context: ID3D11DeviceContext = context.ok_or(Unknown)?;
+    let device: ID3D11Device = device.ok_or(Error::Unknown)?;
+    let context: ID3D11DeviceContext = context.ok_or(Error::Unknown)?;
 
     let adapter: IDXGIAdapter;
     let output: IDXGIOutput;
@@ -150,10 +156,18 @@ fn create_id3d11(monitor: u32) -> Result<(ID3D11Device, ID3D11DeviceContext, IDX
     Ok((device, context, duplication))
 }
 
-unsafe fn convert_rgba_to_nv12(device: &ID3D11Device, context: &ID3D11DeviceContext, tex_rgba: &ID3D11Texture2D, in_width: u32, in_height: u32, out_width: u32, out_height: u32) -> Result<ID3D11Texture2D> {
+unsafe fn convert_rgba_to_nv12(
+    device: &ID3D11Device,
+    context: &ID3D11DeviceContext,
+    tex_rgba: &ID3D11Texture2D,
+    in_width: u32,
+    in_height: u32,
+    out_width: u32,
+    out_height: u32,
+) -> Result<ID3D11Texture2D> {
     // 1) QI for ID3D11VideoDevice
-    let video_dev: ID3D11VideoDevice = device.cast().unwrap();
-    let video_ctx: ID3D11VideoContext = context.cast().unwrap();
+    let video_dev: ID3D11VideoDevice = device.cast()?;
+    let video_ctx: ID3D11VideoContext = context.cast()?;
 
     // 2) Describe & create the VideoProcessorEnumerator
     let vp_desc = D3D11_VIDEO_PROCESSOR_CONTENT_DESC {
@@ -166,16 +180,14 @@ unsafe fn convert_rgba_to_nv12(device: &ID3D11Device, context: &ID3D11DeviceCont
         OutputHeight: out_height,
         Usage: windows::Win32::Graphics::Direct3D11::D3D11_VIDEO_USAGE_OPTIMAL_SPEED,
     };
-    let vp_enum: ID3D11VideoProcessorEnumerator = video_dev.CreateVideoProcessorEnumerator(&vp_desc).unwrap();
+    let vp_enum: ID3D11VideoProcessorEnumerator = video_dev.CreateVideoProcessorEnumerator(&vp_desc)?;
 
 
     //verify
-    if vp_enum.CheckVideoProcessorFormat(DXGI_FORMAT_B8G8R8A8_UNORM).is_err() {
-        panic!("DXGI_FORMAT_B8G8R8A8_UNORM not supported by ID3D11VideoProcessorEnumerator")
-    }
+    vp_enum.CheckVideoProcessorFormat(DXGI_FORMAT_B8G8R8A8_UNORM)?;//panic!("DXGI_FORMAT_B8G8R8A8_UNORM not supported by ID3D11VideoProcessorEnumerator")
 
     // 3) Create the VideoProcessor itself
-    let vp: ID3D11VideoProcessor = video_dev.CreateVideoProcessor(&vp_enum, 0).unwrap();
+    let vp: ID3D11VideoProcessor = video_dev.CreateVideoProcessor(&vp_enum, 0)?;
 
     // 4) Make the NV12 output texture
     let nv12_desc = D3D11_TEXTURE2D_DESC {
@@ -191,8 +203,8 @@ unsafe fn convert_rgba_to_nv12(device: &ID3D11Device, context: &ID3D11DeviceCont
         MiscFlags: 0,
     };
     let mut tex_nv12 = None;
-    device.CreateTexture2D(&nv12_desc, None, Some(&mut tex_nv12)).unwrap();
-    let tex_nv12 = tex_nv12.unwrap();
+    device.CreateTexture2D(&nv12_desc, None, Some(&mut tex_nv12))?;
+    let tex_nv12 = tex_nv12.ok_or(Error::Unknown)?;
 
     // 5) Create processor‐input view for RGBA texture
     let in_view_desc = D3D11_VIDEO_PROCESSOR_INPUT_VIEW_DESC {
@@ -211,8 +223,8 @@ unsafe fn convert_rgba_to_nv12(device: &ID3D11Device, context: &ID3D11DeviceCont
         &vp_enum,
         &in_view_desc,
         Some(&mut input_view),
-    ).unwrap();
-    let input_view = input_view.unwrap();
+    )?;
+    let input_view = input_view.ok_or(CustomError::CUSTOM(Error::Unknown))?;
 
     // 6) Create processor‐output view for NV12
     let out_view_desc = D3D11_VIDEO_PROCESSOR_OUTPUT_VIEW_DESC {
@@ -229,8 +241,8 @@ unsafe fn convert_rgba_to_nv12(device: &ID3D11Device, context: &ID3D11DeviceCont
         &vp_enum,
         &out_view_desc,
         Some(&mut output_view),
-    ).unwrap();
-    let output_view = output_view.unwrap();
+    )?;
+    let output_view = output_view.ok_or(CustomError::CUSTOM(Error::Unknown))?;
 
     // 7) Execute the GPU blit
     let _idk = ManuallyDrop::new(Some(input_view.clone()));
@@ -239,7 +251,7 @@ unsafe fn convert_rgba_to_nv12(device: &ID3D11Device, context: &ID3D11DeviceCont
         pInputSurface: _idk,
         ..Default::default()
     };
-    video_ctx.VideoProcessorBlt(&vp, &output_view, 0, &[stream]).unwrap();
+    video_ctx.VideoProcessorBlt(&vp, &output_view, 0, &[stream])?;
 
     // Return the new NV12 texture & processor
     Ok(tex_nv12)

@@ -38,7 +38,7 @@ async fn main_sync() {
 
     let mut video_recorder = create_video_recorder::<VideoPacketRingBufferType>(&video_source_type, &video_codec, seconds, 2560, 1440, fps).unwrap();
     let mut audio_recorder_input = create_audio_recorder::<AudioPacketRingBufferType>(&audio_source_type, &audio_codec, seconds).unwrap();
-    let mut audio_recorder = AudioProcessWatcher::<AudioPacketRingBufferType>::new(audio_codec, true, seconds);
+    let mut audio_recorder = AudioProcessWatcher::<AudioPacketRingBufferType>::new(audio_codec, true, seconds).unwrap();
 
 
     let save_env = SaverEnv::new("out", "Chat Clip That", Some("sounds/BOOM.mp3"));
@@ -49,31 +49,36 @@ async fn main_sync() {
 
     let mut key_listener = KeyListener::new();
     key_listener.register_shortcut(&[Key::Alt, Key::KeyM], move || {
-        debug_println!("OK GARMIN VIDEO SPEICHERN");
-        tx.send(()).unwrap();
+        eprintln!("OK GARMIN VIDEO SPEICHERN");
+        if let Err(_) = tx.send(()) {
+            eprintln!("Key responder died :(")
+        }
     });
 
     key_listener.start();
 
 
     video_recorder.start_recording(None);
-    audio_recorder.start_recording(None).await;
     audio_recorder_input.start_recording(None);
+    audio_recorder.start_recording().await.unwrap_or_else(|err| panic!("Failed start_recording because: {:?}", err));
 
     loop {
         tokio::select! {
             Some(_) = rx.recv() => {
-                let mut save = save_env.new_save::<String>(None);
+                if let Ok(mut save) = save_env.new_save::<String>(None){
+                    save.add_stream(&video_recorder.ring_buffer, &video_recorder.parameters, true).unwrap();
+                    save.add_stream(&audio_recorder_input.ring_buffer, &audio_recorder_input.parameters, false).unwrap();
 
-                save.add_stream(&video_recorder.ring_buffer, &video_recorder.parameters, true).unwrap();
-                save.add_stream(&audio_recorder_input.ring_buffer, &audio_recorder_input.parameters, false).unwrap();
+                    for (p_id, (recorder, _, _)) in audio_recorder.audio_recorders.lock().await.iter() {
+                        debug_println!("stream added for: {}", p_id);
+                        save.add_stream(&recorder.ring_buffer, &recorder.parameters, false).unwrap();
+                    }
 
-                for (p_id, (recorder, _, _)) in audio_recorder.audio_recorders.lock().await.iter() {
-                    debug_println!("stream added for: {}", p_id);
-                    save.add_stream(&recorder.ring_buffer, &recorder.parameters, false).unwrap();
+                    if let Err(error) = save.finalize_and_save() {
+                        eprintln!("Couldn't save clip: {:?}", error);
+                    }
                 }
 
-                save.finalize_and_save().unwrap();
             },
             else => break,
         }

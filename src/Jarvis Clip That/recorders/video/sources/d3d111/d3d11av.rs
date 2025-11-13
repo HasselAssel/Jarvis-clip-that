@@ -3,6 +3,7 @@ use ffmpeg_next::ffi::{av_buffer_create, AVBufferRef, AVFrame};
 use ffmpeg_next::sys::{av_hwdevice_ctx_alloc, av_hwdevice_ctx_init, av_hwframe_ctx_alloc, av_hwframe_ctx_init, av_buffer_unref, AVHWDeviceType, AVHWDeviceContext, AVPixelFormat, AVHWFramesContext};
 use windows::core::Interface;
 use windows::Win32::Graphics::Direct3D11::{ID3D11Device, ID3D11Texture2D};
+use crate::error::{CustomError, Error};
 use crate::recorders::video::sources::d3d111::traits::D3d11EncoderHwContext;
 use crate::wrappers::MaybeSafeFFIPtrWrapper;
 use crate::types::Result;
@@ -10,10 +11,14 @@ use crate::types::Result;
 pub struct D3d11vaAdapter;
 
 impl D3d11EncoderHwContext for D3d11vaAdapter {
-    fn setup_hw_and_frame_ctx(&self, device: &ID3D11Device, width: i32, height: i32) -> Result<(Option<*mut AVBufferRef>, *mut AVBufferRef)> {
+    fn setup_hw_and_frame_ctx(
+        &self, device: &ID3D11Device,
+        width: i32,
+        height: i32,
+    ) -> Result<(Option<*mut AVBufferRef>, *mut AVBufferRef)> {
         let mut hw_device_ctx = unsafe { av_hwdevice_ctx_alloc(AVHWDeviceType::AV_HWDEVICE_TYPE_D3D11VA) };
-        if hw_device_ctx.is_null() {
-            panic!("Failed to allocate HW device context");
+        if hw_device_ctx.is_null() { //"Failed to allocate HW device context"
+            return Err(CustomError::CUSTOM(Error::Unknown));
         }
 
         #[repr(C)]
@@ -58,7 +63,11 @@ impl D3d11EncoderHwContext for D3d11vaAdapter {
         Ok((Some(hw_device_ctx), hw_frame_ctx))
     }
 
-    fn prepare_frame(&self, av_frame: &MaybeSafeFFIPtrWrapper<AVFrame>, texture: &ID3D11Texture2D) -> Result<()> {
+    fn prepare_frame(
+        &self,
+        av_frame: &MaybeSafeFFIPtrWrapper<AVFrame>,
+        texture: &ID3D11Texture2D,
+    ) -> Result<()> {
         let texture_buffer = unsafe {
             av_buffer_create(
                 texture.as_raw() as _,
@@ -68,6 +77,9 @@ impl D3d11EncoderHwContext for D3d11vaAdapter {
                 0,
             )
         };
+        if texture_buffer.is_null() {
+            return Err(CustomError::CUSTOM(Error::Unknown));
+        }
         unsafe {
             (***av_frame).data[0] = texture.as_raw() as _;
             (***av_frame).buf[0] = texture_buffer;

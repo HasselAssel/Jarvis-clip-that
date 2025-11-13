@@ -10,7 +10,10 @@ pub struct RingBuffer<T: PacketHandler> {
 }
 
 impl<T: PacketHandler> PacketRingBuffer for RingBuffer<T> {
-    fn insert(&mut self, packet: Packet) {
+    fn insert(
+        &mut self,
+        packet: Packet,
+    ) {
         self.frame_counter += packet.duration();
 
         T::insert(&mut self.buffer, packet);
@@ -25,7 +28,10 @@ impl<T: PacketHandler> PacketRingBuffer for RingBuffer<T> {
         }
     }
 
-    fn copy_out(&self, min_requested_frames: Option<i64>) -> Vec<Packet> {
+    fn copy_out(
+        &self,
+        min_requested_frames: Option<i64>,
+    ) -> Vec<Packet> {
         if let Some(min_requested_frames) = min_requested_frames {
             let mut total = 0;
             let mut result = Vec::new();

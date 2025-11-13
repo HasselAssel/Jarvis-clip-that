@@ -7,6 +7,7 @@ use ffmpeg_next::codec::Parameters;
 use ffmpeg_next::format::context;
 use rodio::Decoder;
 use crate::debug_println;
+use crate::error::{CustomError, Error};
 
 use crate::ring_buffer::traits::PacketRingBuffer;
 use crate::types::{Packet, Result};
@@ -19,20 +20,28 @@ pub struct Save {
 }
 
 impl Save {
-    fn new(file_name: String, save_sound_file: Option<Vec<u8>>) -> Self {
-        let o_ctx = ffmpeg_next::format::output_as(&file_name, "mp4").unwrap();
+    fn new(
+        file_name: String,
+        save_sound_file: Option<Vec<u8>>,
+    ) -> Result<Self> {
+        let o_ctx = ffmpeg_next::format::output_as(&file_name, "mp4")?;
         let streams = Vec::new();
 
         let save_sound_decoder = save_sound_file.and_then(|save_sound_file| Some(Decoder::new(Cursor::new(save_sound_file)).ok()?));
 
-        Self {
+        Ok(Self {
             o_ctx,
             streams,
             save_sound_decoder,
-        }
+        })
     }
 
-    pub fn add_stream<PRB: PacketRingBuffer>(&mut self, ring_buffer: &Arc<Mutex<PRB>>, parameters: &Parameters, is_video_else_audio: bool) -> Result<()> {
+    pub fn add_stream<PRB: PacketRingBuffer>(
+        &mut self,
+        ring_buffer: &Arc<Mutex<PRB>>,
+        parameters: &Parameters,
+        is_video_else_audio: bool,
+    ) -> Result<()> {
         let ost = &mut self.o_ctx.add_stream(parameters.id())?;
         ost.set_parameters(parameters.clone());
 
@@ -47,7 +56,7 @@ impl Save {
         let packets = ring_buffer.copy_out(None);
         drop(ring_buffer);
 
-        let packets_pts: Vec<_> = packets.iter().map(|packet| packet.pts().unwrap()).collect();
+        let packets_pts: Vec<_> = packets.iter().map(|packet| packet.pts()).collect();
         debug_println!("NEW STREAM PTS: {:?}", packets_pts);
         debug_println!("-------------------------------------------------------------------------------------------------------------------------------");
 
@@ -57,36 +66,43 @@ impl Save {
     }
 
     pub fn finalize_and_save(mut self) -> Result<()> {
-        let min_pts_in_base_1_sec = self.streams.iter().filter_map(|(packets, tb)| if let Some(packet) = packets.first() {
-            Some((packet, tb))
-        } else {
-            None
-        }).filter_map(|(packet, tb)| if let Some(pts) = packet.pts() {
-            Some(pts as f64 / (tb.1 as f64 / tb.0 as f64))
-        } else {
-            None
-        }).reduce(f64::min).unwrap_or(0.0);
+        let min_pts_in_base_1_sec = self.streams
+            .iter()
+            .filter_map(|(packets, tb)|
+                packets.first()
+                    .and_then(|p| p.pts().map(|pts| pts as f64 / (tb.1 as f64 / tb.0 as f64)))
+            )
+            .reduce(f64::min)
+            .unwrap_or(0.0);
+        let min_dts_in_base_1_sec = self.streams
+            .iter()
+            .filter_map(|(packets, tb)|
+                packets.first()
+                    .and_then(|p| p.dts().map(|dts| dts as f64 / (tb.1 as f64 / tb.0 as f64)))
+            )
+            .reduce(f64::min)
+            .unwrap_or(0.0);
 
         debug_println!("min pts: {}", min_pts_in_base_1_sec);
 
-        let _ = self.streams.iter_mut().for_each(|(packets, tb)| packets.iter_mut().for_each(|packet| packet.set_pts(packet.pts().map(|pts| (pts as f64 - (tb.1 as f64 / tb.0 as f64) * min_pts_in_base_1_sec) as i64))));
+        self.streams.iter_mut().for_each(|(packets, tb)| packets.iter_mut().for_each(|packet| {
+            packet.set_pts(packet.pts().map(|pts| (pts as f64 - (tb.1 as f64 / tb.0 as f64) * min_pts_in_base_1_sec) as i64));
+            packet.set_dts(packet.dts().map(|pts| (pts as f64 - (tb.1 as f64 / tb.0 as f64) * min_dts_in_base_1_sec) as i64));
+        }));
 
-        self.o_ctx.write_header().unwrap();
+        self.o_ctx.write_header()?;
 
         let time_bases = self.o_ctx.streams().map(|stream| stream.time_base()).collect::<Vec<_>>().into_iter();
         for (i, (time_base, (packets, tb))) in time_bases.zip(self.streams.into_iter()).enumerate() {
-            let packets_pts: Vec<_> = packets.iter().map(|packet| packet.pts().unwrap()).collect();
-            debug_println!("NEW STREAM PTS: {:?}", packets_pts);
-            debug_println!("-------------------------------------------------------------------------------------------------------------------------------");
-
             for mut packet in packets {
+                print!("(pts: {:?}, dts: {:?})", packet.pts(), packet.dts());
                 packet.set_stream(i);
                 packet.rescale_ts(tb, time_base);
                 packet.write_interleaved(&mut self.o_ctx)?;
             }
         }
 
-        self.o_ctx.write_trailer().unwrap();
+        self.o_ctx.write_trailer()?;
 
 
         if let Some(save_sound_decoder) = self.save_sound_decoder {
@@ -112,7 +128,11 @@ pub struct SaverEnv {
 }
 
 impl SaverEnv {
-    pub fn new<S: Into<String>>(out_dir_path: S, base_file_name: S, preferred_sound_file_name: Option<&str>) -> Self {
+    pub fn new<S: Into<String>>(
+        out_dir_path: S,
+        base_file_name: S,
+        preferred_sound_file_name: Option<&str>,
+    ) -> Self {
         let out_dir_path = out_dir_path.into();
         let base_file_name = base_file_name.into();
 
@@ -130,9 +150,12 @@ impl SaverEnv {
         }
     }
 
-    pub fn new_save<S: Into<String>>(&self, file_name: Option<S>) -> Save {
+    pub fn new_save<S: Into<String>>(
+        &self,
+        file_name: Option<S>,
+    ) -> Result<Save> {
         let file_name = match file_name {
-            None => { self.get_file_name("mp4") }
+            None => { self.get_file_name("mp4").ok_or(CustomError::CUSTOM(Error::Unknown))? }
             Some(file_name) => { file_name.into() }
         };
 
@@ -141,14 +164,17 @@ impl SaverEnv {
         Save::new(file_name, save_sound_file)
     }
 
-    fn get_file_name<S: Into<String>>(&self, extension: S) -> String {
+    fn get_file_name<S: Into<String>>(
+        &self,
+        extension: S,
+    ) -> Option<String> {
         let extension = extension.into();
 
         let default_name = format!("{}/{}_{}", self.out_dir_path, self.base_file_name, Local::now().format("%Y%m%d_%H%M%S").to_string());
 
         let first_try = format!("{}.{}", default_name, extension);
         if !Path::new(&first_try).exists() {
-            first_try
+            Some(first_try)
         } else {
             let mut found = None;
             for i in 1..=999 {
@@ -158,7 +184,7 @@ impl SaverEnv {
                     break;
                 }
             }
-            found.expect("All 999 filenames exist!")
+            found
         }
     }
 }

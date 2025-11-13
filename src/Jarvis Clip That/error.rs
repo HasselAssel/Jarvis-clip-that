@@ -1,6 +1,6 @@
 #[derive(Debug)]
 pub enum Error {
-    NotYetImplemented,
+    jrNotYetImplemented,
     NonExistentParameterCombination,
 
     Unknown,

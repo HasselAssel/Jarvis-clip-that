@@ -22,8 +22,10 @@ impl KeyListener {
         }
     }
 
-    pub fn register_shortcut<F>(&mut self, keys: &[Key], action: F)
-    where
+    pub fn register_shortcut<F>(
+        &mut self,
+        keys: &[Key], action: F,
+    ) where
         F: Fn() + Send + 'static
     {
         let shortcut = Shortcut {
@@ -66,7 +68,7 @@ impl KeyListener {
             };
 
             if let Err(e) = listen(handler) {
-                eprintln!("Error: {:?}", e);
+                eprintln!("Key listener Error: {:?}", e);
             }
         });
     }

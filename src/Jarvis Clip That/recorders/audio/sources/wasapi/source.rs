@@ -21,6 +21,7 @@ use windows::Win32::System::Variant::VT_BLOB;
 use windows::core::{Interface, HRESULT, IUnknown};
 use windows_core::{BOOL, GUID, PCWSTR};
 use crate::debug_println;
+use crate::error::{CustomError, Error};
 use crate::recorders::audio::sources::enums::{AudioCodec, AudioSourceType};
 
 use crate::recorders::audio::sources::traits::AudioSource;
@@ -47,17 +48,21 @@ pub struct AudioSourceWasapi<E: WasapiEncoderCtx> {
 }
 
 impl<E: WasapiEncoderCtx> AudioSourceWasapi<E> {
-    fn new(context_encoder: E, client: IAudioClient, format: WAVEFORMATEX) -> Result<Self> {
+    fn new(
+        context_encoder: E,
+        client: IAudioClient,
+        format: WAVEFORMATEX,
+    ) -> Result<Self> {
         let client = MaybeSafeComWrapper(client);
 
         let event;
         unsafe {
-            event = CreateEventW(None, false, false, None).unwrap();
-            client.SetEventHandle(event).unwrap();
+            event = CreateEventW(None, false, false, None)?;
+            client.SetEventHandle(event)?;
         }
         let event = MaybeSafeHANDLEWrapper(event);
 
-        let capture_client = unsafe { client.GetService().unwrap() };
+        let capture_client = unsafe { client.GetService()? };
         let capture_client = MaybeSafeComWrapper(capture_client);
 
         Ok(Self {
@@ -77,31 +82,45 @@ impl<E: WasapiEncoderCtx> AudioSourceWasapi<E> {
         })
     }
 
-    pub fn new_default(context_encoder: E, render_else_capture: bool) -> Result<Self> {
-        let (client, format) = create_default_iaudioclient(render_else_capture).unwrap();
+    pub fn new_default(
+        context_encoder: E,
+        render_else_capture: bool,
+    ) -> Result<Self> {
+        let (client, format) = create_default_iaudioclient(render_else_capture)?;
         Self::new(context_encoder, client, format)
     }
 
-    pub fn new_process(context_encoder: E, process_id: u32, include_tree: bool) -> Result<Self> {
+    pub fn new_process(
+        context_encoder: E,
+        process_id: u32,
+        include_tree: bool,
+    ) -> Result<Self> {
         let (client, format) = create_process_iaudioclient(process_id, include_tree)?;
         Self::new(context_encoder, client, format)
     }
 }
 
 impl<E: WasapiEncoderCtx> AudioSource for AudioSourceWasapi<E> {
-    fn init(&mut self) {
+    fn init(&mut self) -> Result<()> {
         unsafe {
-            QueryPerformanceFrequency(&mut self.frequency).unwrap();
-            QueryPerformanceCounter(&mut self.start_time).unwrap();
+            QueryPerformanceFrequency(&mut self.frequency)?;
+            QueryPerformanceCounter(&mut self.start_time)?;
         }
-        unsafe { self.client.Start().unwrap(); }
+        unsafe { self.client.Start()? }
+        Ok(())
     }
 
     fn await_new_audio(&mut self) {
         unsafe { WaitForSingleObject(*self.event, INFINITE); }
     }
 
-    fn gather_new_audio<PRB: PacketRingBuffer>(&mut self, ring_buffer: &Arc<Mutex<PRB>>, encoder: &mut Encoder, frame: &mut Audio, silent_frame: &mut Audio) -> Result<()> {
+    fn gather_new_audio<PRB: PacketRingBuffer>(
+        &mut self,
+        ring_buffer: &Arc<Mutex<PRB>>,
+        encoder: &mut Encoder,
+        frame: &mut Audio,
+        silent_frame: &mut Audio,
+    ) -> Result<()> {
         let mut packet_length = 0;
         let mut data = std::ptr::null_mut();
         let mut flags = 0;
@@ -118,9 +137,7 @@ impl<E: WasapiEncoderCtx> AudioSource for AudioSourceWasapi<E> {
             )?;
         }
 
-        self.context_encoder.process_audio(ring_buffer, encoder, frame, silent_frame, packet_length, data, qpc_pos, self.start_time, self.frequency, &self.format, &mut self.pts_counter, &mut self.audio_buffer, &self.capture_client);
-
-        Ok(())
+        self.context_encoder.process_audio(ring_buffer, encoder, frame, silent_frame, packet_length, data, qpc_pos, self.start_time, self.frequency, &self.format, &mut self.pts_counter, &mut self.audio_buffer, &self.capture_client)
     }
 }
 
@@ -138,7 +155,7 @@ pub fn create_default_iaudioclient(render_else_capture: bool) -> Result<(IAudioC
             &MMDeviceEnumerator,
             None,
             CLSCTX_ALL,
-        ).unwrap()
+        )?
     };
 
     let dataflow = match render_else_capture {
@@ -149,14 +166,14 @@ pub fn create_default_iaudioclient(render_else_capture: bool) -> Result<(IAudioC
         enumerator.GetDefaultAudioEndpoint(
             dataflow,
             eConsole,
-        ).unwrap()
+        )?
     };
 
     let client: IAudioClient = unsafe {
         device.Activate(
             CLSCTX_ALL,
             None,
-        ).unwrap()
+        )?
     };
 
     let format = unsafe { client.GetMixFormat()? };
@@ -195,7 +212,10 @@ pub fn create_default_iaudioclient(render_else_capture: bool) -> Result<(IAudioC
     Ok((client, format))
 }
 
-fn create_process_iaudioclient(process_id: u32, include_tree: bool) -> Result<(IAudioClient, WAVEFORMATEX)> {
+fn create_process_iaudioclient(
+    process_id: u32,
+    include_tree: bool,
+) -> Result<(IAudioClient, WAVEFORMATEX)> {
     let _try_init = unsafe {
         windows::Win32::System::Com::CoInitializeEx(None, windows::Win32::System::Com::COINIT_MULTITHREADED)
     };
@@ -271,7 +291,7 @@ fn create_process_iaudioclient(process_id: u32, include_tree: bool) -> Result<(I
     result.ok()?;  // check success
 
     // Downcast to IAudioClient
-    let client: IAudioClient = unknown.unwrap().cast()?;
+    let client: IAudioClient = unknown.ok_or(CustomError::CUSTOM(Error::Unknown))?.cast()?;
 
     let format = new_waveformatextensible(32, 32, 44100, 2, None);
 
@@ -297,19 +317,23 @@ pub struct AudioProcessWatcher<PRB: PacketRingBuffer> {
 }
 
 impl<PRB: PacketRingBuffer + 'static> AudioProcessWatcher<PRB> {
-    pub fn new(audio_codec: AudioCodec, include_tree: bool, min_secs: u32) -> Self {
+    pub fn new(
+        audio_codec: AudioCodec,
+        include_tree: bool, min_secs: u32,
+    ) -> Result<Self> {
         let audio_recorders = Arc::new(tokio::sync::Mutex::new(HashMap::new()));
         let a = audio_recorders.clone();
-        Self {
+        Ok(Self {
             audio_recorders,
-            _audio_process_watcher: Some(_AudioProcessWatcher::new(audio_codec, include_tree, min_secs, a).unwrap()),
-        }
+            _audio_process_watcher: Some(_AudioProcessWatcher::new(audio_codec, include_tree, min_secs, a)?),
+        })
     }
 
-    pub async fn start_recording(&mut self, _: Option<()>) {
+    pub async fn start_recording(&mut self) -> Result<bool> {
         if let Some(recorder) = self._audio_process_watcher.take() {
-            let _ = recorder.start_listening().await;
+            return recorder.start_listening().await.and(Ok(true));
         }
+        Ok(false)
     }
 }
 
@@ -325,7 +349,12 @@ struct _AudioProcessWatcher<PRB: PacketRingBuffer> {
 unsafe impl<PRB: PacketRingBuffer> Send for _AudioProcessWatcher<PRB> {}
 
 impl<PRB: PacketRingBuffer + 'static> _AudioProcessWatcher<PRB> {
-    fn new(audio_codec: AudioCodec, include_tree: bool, min_secs: u32, audio_recorders: Arc<tokio::sync::Mutex<HashMap<u32, (Recorder<PRB>, String, Arc<AtomicBool>)>>>) -> Result<Self> {
+    fn new(
+        audio_codec: AudioCodec,
+        include_tree: bool,
+        min_secs: u32,
+        audio_recorders: Arc<tokio::sync::Mutex<HashMap<u32, (Recorder<PRB>, String, Arc<AtomicBool>)>>>,
+    ) -> Result<Self> {
         let _ = unsafe { windows::Win32::System::Com::CoInitializeEx(None, windows::Win32::System::Com::COINIT_MULTITHREADED) };
         let device_enumerator: IMMDeviceEnumerator = unsafe { CoCreateInstance(&MMDeviceEnumerator, None, CLSCTX_ALL)? };
         let device = unsafe { device_enumerator.GetDefaultAudioEndpoint(eRender, eMultimedia)? };
@@ -342,7 +371,10 @@ impl<PRB: PacketRingBuffer + 'static> _AudioProcessWatcher<PRB> {
         })
     }
 
-    async unsafe fn try_add_new_process(&mut self, p_id: u32) -> Option<()> {
+    async unsafe fn try_add_new_process(
+        &mut self,
+        p_id: u32,
+    ) -> Option<()> {
         let mut audio_recorders = self.audio_recorders.lock().await;
         if audio_recorders.contains_key(&p_id) {
             return None;

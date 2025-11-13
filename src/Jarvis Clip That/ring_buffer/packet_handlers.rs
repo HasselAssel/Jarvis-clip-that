@@ -1,6 +1,7 @@
 use std::collections::VecDeque;
-use crate::types::Packet;
+
 use crate::ring_buffer::traits::PacketHandler;
+use crate::types::Packet;
 
 #[derive(Default)]
 pub struct KeyFrameStartPacketWrapper {
@@ -22,15 +23,17 @@ impl PacketHandler for Packet {
 }
 
 impl PacketHandler for KeyFrameStartPacketWrapper {
-    fn insert(container: &mut VecDeque<Self>, packet: Packet) {
-        let needs_new = container.back().map_or(true, |item| {item.buffer.last().unwrap().is_key()});
+    fn insert(
+        container: &mut VecDeque<Self>,
+        packet: Packet,
+    ) {
+        let needs_new = container.back().map_or(true, |item| { item.buffer.last().expect("Corrupted KeyFrameStartPacketWrapper (no inner element)").is_key() });
 
         if needs_new {
             container.push_back(KeyFrameStartPacketWrapper::default());
         }
 
-        // Now it's guaranteed to be non-empty and valid
-        let target_self = container.back_mut().unwrap();
+        let target_self = container.back_mut().expect("Corrupted KeyFrameStartPacketWrapper Container (doesn't contain element)");
         target_self.buffer.push(packet);
     }
 

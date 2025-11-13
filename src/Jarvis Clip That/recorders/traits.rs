@@ -8,7 +8,12 @@ pub trait TRecorder<PRB: PacketRingBuffer> {
     fn start_capturing(self: Box<Self>, stop_capturing_callback: Option<Arc<AtomicBool>>) -> RecorderJoinHandle;
 }
 
-pub fn send_frame_and_receive_packets<PRB: PacketRingBuffer>(ring_buffer: &Arc<Mutex<PRB>>, encoder: &mut codec::encoder::Encoder, frame: &ffmpeg_next::Frame, mut duration: i64) -> Result<()> {
+pub fn send_frame_and_receive_packets<PRB: PacketRingBuffer>(
+    ring_buffer: &Arc<Mutex<PRB>>,
+    encoder: &mut codec::encoder::Encoder,
+    frame: &ffmpeg_next::Frame,
+    mut duration: i64,
+) -> Result<()> {
     encoder.send_frame(frame)?;
 
     let mut packet = Packet::empty();

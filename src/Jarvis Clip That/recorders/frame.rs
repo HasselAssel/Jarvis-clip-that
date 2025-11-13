@@ -4,30 +4,46 @@ use ffmpeg_next::frame::Audio;
 
 use ffmpeg_next::sys::{av_buffer_ref, av_frame_alloc, av_hwframe_get_buffer, AVBufferRef, AVFrame, AVPixelFormat};
 use crate::debug_println;
+use crate::error::{CustomError, Error};
 
-use crate::error::Error::Unknown;
 use crate::types::Result;
 
-pub fn create_av_frame(format: AVPixelFormat, width: i32, height: i32, hw_frame_ctx: *mut AVBufferRef) -> Result<*mut AVFrame> {
+pub fn create_av_frame(
+    format: AVPixelFormat,
+    width: i32,
+    height: i32,
+    hw_frame_ctx: *mut AVBufferRef,
+) -> Result<*mut AVFrame> {
     let av_frame;
     unsafe {
         av_frame = av_frame_alloc();
+        if av_frame.is_null() {
+            return Err(CustomError::CUSTOM(Error::Unknown));
+        }
         (*av_frame).format = format as i32; // AV_PIX_FMT_D3D11 as i32;
         (*av_frame).width = width;
         (*av_frame).height = height;
-        (*av_frame).hw_frames_ctx = av_buffer_ref(hw_frame_ctx);
+        let hw_frames_ctx = av_buffer_ref(hw_frame_ctx);
+        if hw_frames_ctx.is_null() {
+            return Err(CustomError::CUSTOM(Error::Unknown));
+        }
+        (*av_frame).hw_frames_ctx = hw_frames_ctx;
     }
     let ret = unsafe {
         av_hwframe_get_buffer(hw_frame_ctx, av_frame, 0)
     };
     if ret < 0 || av_frame.is_null() {
         //return Err(format!("av_hwframe_get_buffer failed: {}", ret));
-        return Err(Unknown.into());
+        return Err(CustomError::CUSTOM(Error::Unknown));
     }
     Ok(av_frame)
 }
 
-pub fn create_audio_frames(format: Sample, size: usize, layout: ChannelLayout) -> (Audio, Audio) {
+pub fn create_audio_frames(
+    format: Sample,
+    size: usize,
+    layout: ChannelLayout,
+) -> (Audio, Audio) {
     let frame = Audio::new(
         format,
         size,
@@ -45,7 +61,10 @@ pub fn create_audio_frames(format: Sample, size: usize, layout: ChannelLayout) -
     (frame, silent_frame)
 }
 
-pub unsafe fn copy_into_audio_frame(frame: &mut Audio, buffer: Vec<u8>) { // ONLY FOR 4 byte stereo
+pub unsafe fn copy_into_audio_frame(
+    frame: &mut Audio,
+    buffer: Vec<u8>,
+) { // ONLY FOR 4 byte stereo
     let bytes_per_sample = frame.format().bytes();
     let num_channels = frame.channels() as usize;
 
