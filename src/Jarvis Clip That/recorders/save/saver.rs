@@ -95,7 +95,6 @@ impl Save {
         let time_bases = self.o_ctx.streams().map(|stream| stream.time_base()).collect::<Vec<_>>().into_iter();
         for (i, (time_base, (packets, tb))) in time_bases.zip(self.streams.into_iter()).enumerate() {
             for mut packet in packets {
-                print!("(pts: {:?}, dts: {:?})", packet.pts(), packet.dts());
                 packet.set_stream(i);
                 packet.rescale_ts(tb, time_base);
                 packet.write_interleaved(&mut self.o_ctx)?;

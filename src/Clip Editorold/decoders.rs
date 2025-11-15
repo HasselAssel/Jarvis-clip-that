@@ -4,9 +4,13 @@ use ffmpeg_next::software::scaling;
 use ffmpeg_next::software::scaling::Flags;
 use rodio::buffer::SamplesBuffer;
 
+pub enum DecodedFrame {
+    Video(frame::Video),
+    Audio(frame::Audio),
+}
+
 pub trait FfmpegDecoder {
-    type DecodedFrame;
-    fn process_packet(&mut self, packet: &ffmpeg_next::packet::Packet) -> Vec<Self::DecodedFrame>;
+    fn process_packet(&mut self, packet: &ffmpeg_next::packet::Packet) -> Vec<DecodedFrame>;
 }
 
 pub struct VideoDecoder {
@@ -15,8 +19,7 @@ pub struct VideoDecoder {
     pub out_height: u32,
 }
 impl FfmpegDecoder for VideoDecoder {
-    type DecodedFrame = frame::Video;
-    fn process_packet(&mut self, packet: &ffmpeg_next::packet::Packet) -> Vec<Self::DecodedFrame> {
+    fn process_packet(&mut self, packet: &ffmpeg_next::packet::Packet) -> Vec<DecodedFrame> {
         let mut frames = Vec::new();
 
         let _ = self.decoder.send_packet(packet);
@@ -38,7 +41,7 @@ impl FfmpegDecoder for VideoDecoder {
             let mut rgb_frame = frame::Video::empty();
             scaler.run(&mut video_frame, &mut rgb_frame).unwrap();
 
-            frames.push(rgb_frame);
+            frames.push(DecodedFrame::Video(rgb_frame));
         }
 
         frames
@@ -50,8 +53,7 @@ pub struct AudioDecoder {
 }
 
 impl FfmpegDecoder for AudioDecoder {
-    type DecodedFrame = frame::Audio;
-    fn process_packet(&mut self, packet: &ffmpeg_next::packet::Packet) -> Vec<Self::DecodedFrame> {
+    fn process_packet(&mut self, packet: &ffmpeg_next::packet::Packet) -> Vec<DecodedFrame> {
         let mut frames = Vec::new();
 
         let _ = self.decoder.send_packet(packet);
@@ -77,7 +79,7 @@ impl FfmpegDecoder for AudioDecoder {
 
             let sample_buffer = SamplesBuffer::new(channels, rate, samples);
 
-            frames.push(audio_frame.clone());
+            frames.push(DecodedFrame::Audio(audio_frame.clone()));
         }
         frames
     }

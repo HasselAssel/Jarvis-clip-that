@@ -2,11 +2,11 @@ use std::collections::HashMap;
 use crate::debug_println;
 
 pub struct Media {
-    pub streams: HashMap<usize, StreamInfo>,
+    pub streams: HashMap<usize, Stream>,
     pub ictx: ffmpeg_next::format::context::Input,
 }
 
-pub struct StreamInfo {
+pub struct Stream {
     pub stream_index: usize,
     pub parameters: ffmpeg_next::codec::Parameters,
     pub packet_headers: Vec<PacketIndex>,
@@ -24,7 +24,7 @@ impl Media {
     pub fn open_file(input_path: &str) -> Self {
         let mut ictx = ffmpeg_next::format::input(input_path).unwrap();
 
-        let mut streams = ictx.streams().into_iter().map(|stream| (stream.index(), StreamInfo { stream_index: stream.index(), parameters: stream.parameters(), packet_headers: Vec::new() })).collect::<HashMap<_, _>>();
+        let mut streams = ictx.streams().into_iter().map(|stream| (stream.index(), Stream { stream_index: stream.index(), parameters: stream.parameters(), packet_headers: Vec::new() })).collect::<HashMap<_, _>>();
         ictx.streams().for_each(|stream| debug_println!("stream {}", stream.index()));
 
         for (i, (stream, packet)) in ictx.packets().enumerate() {

@@ -7,7 +7,6 @@ use tokio::sync::mpsc as tokio_mpsc;
 
 pub struct StreamScheduler<T> {
     receiver: tokio_mpsc::Receiver<T>,
-    //sender: std_mpsc::Sender<T>,
     rate: f64,
     is_playing: Arc<AtomicBool>,
 

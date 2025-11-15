@@ -19,14 +19,14 @@ pub struct VideoSettings {
 pub struct AudioSettings;
 
 struct DecoderChannel {
-    decoder: Box<dyn FfmpegDecoder + Send>,
+    pub decoder: Box<dyn FfmpegDecoder + Send>,
     sender: tokio_mpsc::Sender<DecodedFrame>,
 }
 
 pub struct MediaDecoder {
-    media: Media,
+    pub media: Media,
     pos: u32,
-    decoders: HashMap<usize, DecoderChannel>,
+    pub decoders: HashMap<usize, DecoderChannel>,
 }
 
 impl MediaDecoder {

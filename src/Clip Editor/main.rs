@@ -1,18 +1,13 @@
-use crate::clip_editor::ClipEditor;
-
-mod egui;
-mod media_decoder;
-mod media;
-mod stream_handle;
-mod decoders;
-mod textures;
-mod media_playback;
-mod clip_editor;
 #[path = "../shared_macros.rs"]
 mod shared_macros;
+mod media;
+mod egui;
+mod stream;
+mod media_playback;
+mod decoders;
+mod stream_scheduler;
+mod textures;
 
+fn main() {
 
-pub fn main() {
-    let ce = ClipEditor::new();
-    ce.start_gui();
 }
