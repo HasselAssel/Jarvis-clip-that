@@ -1,3 +1,4 @@
+use std::hint::unreachable_unchecked;
 use std::sync::{Arc, Mutex};
 use std::sync::atomic::AtomicBool;
 
@@ -134,7 +135,7 @@ pub fn create_audio_recorder<PRB: PacketRingBuffer + 'static>(
             let render_else_capture = match audio_source_type {
                 AudioSourceType::WasApiDefaultSys => { true }
                 AudioSourceType::WasApiDefaultInput => { false }
-                _ => { unreachable!() }
+                _ => { unsafe { unreachable_unchecked() } }
             };
 
             match audio_code_c {
