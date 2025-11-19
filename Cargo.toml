@@ -22,7 +22,7 @@ rodio = "0.20.1"
 eframe = { version = "0.31.1", features = ["wgpu"] }
 egui-wgpu = "0.31.1"
 
-crossbeam-channel = "0.5.15"
+async-trait = "0.1.88"
 
 [[bin]]
 name = "jarvis-clip-that"
