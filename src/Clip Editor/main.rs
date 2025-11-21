@@ -15,8 +15,8 @@ mod audio_playback;
 
 fn main() {
     let video_settings = VideoSettings {
-        width: 2000,
-        height: 1000,
+        width: 1000,
+        height: 750,
     };
     let audio_setting = AudioSettings;
 

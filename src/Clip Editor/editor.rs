@@ -1,12 +1,14 @@
 use std::sync::Arc;
 use std::sync::mpsc as sync_mpsc;
 use std::thread;
+use eframe::egui;
 
 use ffmpeg_next::media::Type;
 use rodio::{OutputStream, Sink};
 use tokio::sync::mpsc as tokio_mpsc;
 
 use crate::audio_playback::{frame_to_interleaved_f32, LiveSource};
+use crate::debug_println;
 use crate::egui::{EditorGui, GUIMessage, WorkerMessage};
 use crate::media::Media;
 use crate::media_playback::{AudioSettings, MediaPlayback, VideoSettings};
@@ -41,42 +43,64 @@ impl ClipEditor {
         let width = self.video_settings.width;
         let height = self.video_settings.height;
 
-
         let worker_message_receiver = self._worker_message_receiver.take().unwrap();
         let gui_message_sender = self._gui_message_sender.take().unwrap();
+
+        let media = Media::open_file("out/Chat Clip That_20250818_004213.mp4");
+        //let media = Media::open_file("out/Marvel-Rivals__2025-03-13__20-58-48.mp4");
+
+        let media_dur = media.ictx.duration();
+        let media_length = media_dur as f32 / ffmpeg_next::sys::AV_TIME_BASE as f32;
+        println!("media_length {} {}", media_dur, media_length);
 
         let (ctx_tx, ctx_rx) = tokio::sync::oneshot::channel();
         thread::spawn(move || {
             let runtime = tokio::runtime::Runtime::new().unwrap();
             runtime.block_on(async {
-                self.start_editor(ctx_rx).await;
+                self.start_editor(ctx_rx, media).await;
             });
         });
 
+        let options = eframe::NativeOptions {
+            viewport: egui::ViewportBuilder::default()
+                .with_inner_size([1500., 1000.]),
+            ..Default::default()
+        };
+
         let _ = eframe::run_native(
             "Clip Editor",
-            eframe::NativeOptions::default(),
-            Box::new(|cc| Ok(Box::new(EditorGui::new(cc, ctx_tx, width, height, worker_message_receiver, gui_message_sender)))),
+            options,
+            Box::new(|cc| Ok(Box::new(EditorGui::new(cc, ctx_tx, width, height, media_length, worker_message_receiver, gui_message_sender)))),
         );
     }
 
     async fn start_editor(
-        self,
-        ctx_rx: tokio::sync::oneshot::Receiver<eframe::egui::Context>,
+        mut self,
+        ctx_rx: tokio::sync::oneshot::Receiver<egui::Context>,
+        media: Media,
     ) {
         let ctx = ctx_rx.await.unwrap();
 
-        let media = Media::open_file("out/Chat Clip That_20250818_004213.mp4");
-        //let media = Media::open_file("out/Marvel-Rivals__2025-03-13__20-58-48.mp4");
         let mut media_playback = MediaPlayback::new(media, self.video_settings, self.audio_settings, 3.0);
-        {
-            media_playback.dummy_callback_insert(ctx, self.worker_message_sender);
-        }
 
-        let video_handles = media_playback.get_handles();
+        media_playback.dummy_callback_insert(ctx, self.worker_message_sender);
 
-        tokio::spawn(async {
-
+        let mut video_handles = media_playback.get_handles();
+        tokio::spawn(async move {
+            while let Some(message) = self.gui_message_receiver.recv().await {
+                match message {
+                    GUIMessage::VideoStateChange => {
+                        for (_, handle) in &mut video_handles {
+                            eprintln!("VideoStateChange");
+                            handle.change_state();
+                        }
+                    },
+                    GUIMessage::VideoPosChanged(pos) => {
+                        for (_, handle) in &video_handles {
+                        }
+                    }
+                }
+            }
         });
 
         media_playback.start().await;

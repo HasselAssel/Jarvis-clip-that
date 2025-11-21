@@ -56,18 +56,18 @@ impl MediaPlayback {
                         Box::new(DynRateScheduler::new(max_buffered_duration, call_back))
                     } else {
                         let rate = params.framerate.num as f64 / params.framerate.den as f64;
-                        Box::new(FixedRateScheduler::new(rate, max_buffered_seconds as f64, call_back))
+                        Box::new(FixedRateScheduler::new(rate, max_buffered_seconds, call_back))
                     };
                     let stream = Stream::new(video_decoder, scheduler);
                     video_streams.insert(*index, stream);
                 }
                 Type::Audio => {
                     let call_back: Arc<AsyncFnType<_>> = Arc::new(|_| Box::pin(async {}));
-                    let rate = params.sample_rate as f64;
+                    let rate = params.sample_rate as f64; // TODO!!!!!!!!!
                     let audio_decoder = AudioDecoder {
                         decoder: ctx.decoder().audio().ok().unwrap()
                     };
-                    let scheduler = Box::new(FixedRateScheduler::new(rate, max_buffered_seconds as f64, call_back));
+                    let scheduler = Box::new(FixedRateScheduler::new(rate, max_buffered_seconds, call_back));
                     let stream = Stream::new(audio_decoder, scheduler);
                     audio_streams.insert(*index, stream);
                 }
@@ -97,8 +97,6 @@ impl MediaPlayback {
             stream.stream_scheduler.set_call_back(video_back_back);
         };
 
-        //let audio_back_back = Arc::new(|| Box::pin(async {}));
-
         for (i, stream) in &mut self.audio_streams {
             if let Some(stream_info) = self.media.streams.get(&i) {
                 let (tx, rx) = std::sync::mpsc::channel();
@@ -121,7 +119,9 @@ impl MediaPlayback {
                     let tx = tx.clone();
                     Box::pin(async move {
                         let audio_data = frame_to_interleaved_f32(&audio_frame);
-                        audio_data.into_iter().for_each(|d| { let _ = tx.send(d); })
+                        for d in audio_data {
+                            tx.send(d).unwrap();
+                        }
                     })
                 });
 

@@ -1,25 +1,36 @@
 use std::sync::Arc;
-use std::sync::atomic::AtomicBool;
+use std::sync::atomic::Ordering;
 
 use crate::decoders::FfmpegDecoder;
-use crate::stream_scheduler::StreamFrameScheduler;
+use crate::stream_scheduler::{PlayState, StreamFrameScheduler};
 
 pub struct StreamHandle {
-    is_playing: Arc<AtomicBool>,
+    play_state: Arc<PlayState>,
+}
+
+impl StreamHandle {
+    pub fn change_state(&self) {
+        self.play_state.flip_playing();
+    }
+
+    pub fn clear_buffered_frames(&self) {
+
+    }
 }
 
 pub struct Stream<D: FfmpegDecoder> {
     decoder: D,
     pub stream_scheduler: Box<dyn StreamFrameScheduler<D::DecodedFrame>>,
-    is_playing: Arc<AtomicBool>,
+    play_state: Arc<PlayState>,
 }
 
 impl<D: FfmpegDecoder> Stream<D> {
     pub fn new(decoder: D, stream_scheduler: Box<dyn StreamFrameScheduler<D::DecodedFrame>>) -> Self {
+        let play_state = stream_scheduler.get_play_state();
         Self {
             decoder,
             stream_scheduler,
-            is_playing: Arc::new(AtomicBool::new(true)),
+            play_state,
         }
     }
 
@@ -29,7 +40,7 @@ impl<D: FfmpegDecoder> Stream<D> {
 
     pub fn get_stream_handle(&self) -> StreamHandle {
         StreamHandle {
-            is_playing: self.is_playing.clone(),
+            play_state: self.play_state.clone(),
         }
     }
 
