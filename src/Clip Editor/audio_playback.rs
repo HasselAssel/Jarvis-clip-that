@@ -1,7 +1,10 @@
+use std::sync::Arc;
+use std::sync::atomic::Ordering;
 use std::sync::mpsc::Receiver;
 use std::time::Duration;
-use ffmpeg_next::format::Sample;
 
+use atomic_float::AtomicF32;
+use ffmpeg_next::format::Sample;
 use ffmpeg_next::frame::Audio;
 use rodio::Source;
 
@@ -9,13 +12,14 @@ pub struct LiveSource {
     pub receiver: Receiver<f32>,
     pub sample_rate: u32,
     pub channels: u16,
+    pub volume: Arc<AtomicF32>,
 }
 
 impl Iterator for LiveSource {
     type Item = f32;
 
     fn next(&mut self) -> Option<Self::Item> {
-        self.receiver.recv().ok()
+        self.receiver.recv().ok().map(|s| s * &self.volume.load(Ordering::SeqCst))
     }
 }
 

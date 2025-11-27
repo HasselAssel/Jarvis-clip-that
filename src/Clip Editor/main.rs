@@ -18,7 +18,9 @@ fn main() {
         width: 1000,
         height: 750,
     };
-    let audio_setting = AudioSettings;
+    let audio_setting = AudioSettings {
+        initial_vol: 1.,
+    };
 
     let ce = ClipEditor::new(video_settings, audio_setting);
     ce.start_gui();

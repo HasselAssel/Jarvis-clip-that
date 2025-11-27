@@ -2,7 +2,6 @@ use ffmpeg_next::{decoder, frame};
 use ffmpeg_next::format::{Pixel, Sample};
 use ffmpeg_next::software::scaling;
 use ffmpeg_next::software::scaling::Flags;
-use rodio::buffer::SamplesBuffer;
 
 pub trait FfmpegDecoder {
     type DecodedFrame;
@@ -60,22 +59,7 @@ impl FfmpegDecoder for AudioDecoder {
 
         while let Ok(_) = self.decoder.receive_frame(&mut audio_frame) {
             let format = audio_frame.format();
-            let channels = audio_frame.channels();
-            let rate = audio_frame.rate();
-            let nb_samples = audio_frame.samples();
-
             matches!(format, Sample::F32(_));
-
-            let pcm_data = audio_frame.data(0);
-
-            let samples = unsafe {
-                std::slice::from_raw_parts(
-                    pcm_data.as_ptr() as *const f32,
-                    nb_samples * channels as usize,
-                )
-            };
-
-            let sample_buffer = SamplesBuffer::new(channels, rate, samples);
 
             frames.push(audio_frame.clone());
         }

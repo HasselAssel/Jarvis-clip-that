@@ -22,6 +22,8 @@ rodio = "0.20.1"
 eframe = { version = "0.31.1", features = ["wgpu"] }
 egui-wgpu = "0.31.1"
 
+atomic_float = "1.1.0"
+
 [[bin]]
 name = "jarvis-clip-that"
 path = "src/Jarvis Clip That/main.rs"

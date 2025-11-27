@@ -12,7 +12,7 @@ pub struct StreamInfo {
     pub packet_headers: Vec<PacketIndex>,
 }
 
-struct PacketIndex {
+pub struct PacketIndex {
     pub pts: Option<i64>,
     pub dts: Option<i64>,
     pub duration: i64,

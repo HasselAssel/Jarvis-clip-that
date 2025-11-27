@@ -1,18 +1,14 @@
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::mpsc as sync_mpsc;
 use std::thread;
-use eframe::egui;
 
-use ffmpeg_next::media::Type;
-use rodio::{OutputStream, Sink};
+use eframe::egui;
 use tokio::sync::mpsc as tokio_mpsc;
 
-use crate::audio_playback::{frame_to_interleaved_f32, LiveSource};
-use crate::debug_println;
 use crate::egui::{EditorGui, GUIMessage, WorkerMessage};
 use crate::media::Media;
 use crate::media_playback::{AudioSettings, MediaPlayback, VideoSettings};
-
 
 pub struct ClipEditor {
     worker_message_sender: sync_mpsc::Sender<WorkerMessage>,
@@ -80,29 +76,49 @@ impl ClipEditor {
         media: Media,
     ) {
         let ctx = ctx_rx.await.unwrap();
+        let seeking_seconds_f32 = Arc::new(AtomicU32::new(f32::to_bits(f32::NEG_INFINITY)));
+        let seeking_seconds_f32_ = seeking_seconds_f32.clone();
+        let cond = Arc::new(AtomicBool::new(false));
+        let cond_ = cond.clone();
 
         let mut media_playback = MediaPlayback::new(media, self.video_settings, self.audio_settings, 3.0);
-
-        media_playback.dummy_callback_insert(ctx, self.worker_message_sender);
+        let volumes = media_playback.dummy_callback_insert(ctx, &self.worker_message_sender).await;
+        for (index, _) in &volumes {
+            self.worker_message_sender.send(WorkerMessage::AddAudioTrack(*index)).unwrap();
+        }
 
         let mut video_handles = media_playback.get_handles();
         tokio::spawn(async move {
             while let Some(message) = self.gui_message_receiver.recv().await {
                 match message {
-                    GUIMessage::VideoStateChange => {
+                    GUIMessage::VideoStateChange(state) => {
                         for (_, handle) in &mut video_handles {
                             eprintln!("VideoStateChange");
-                            handle.change_state();
+                            if let Some(state) = state {
+                                handle.set_state(state);
+                            } else {
+                                handle.change_state();
+                            }
                         }
-                    },
+                    }
                     GUIMessage::VideoPosChanged(pos) => {
+                        eprintln!("VideoPosChanged: {}", pos);
                         for (_, handle) in &video_handles {
+                            handle.clear_buffered_frames()
+                        }
+                        seeking_seconds_f32.store(f32::to_bits(pos), Ordering::SeqCst);
+                        cond.store(true, Ordering::SeqCst);
+                    }
+                    GUIMessage::VolumeChanged(new_vol, index) => {
+                        eprintln!("VolumeChanged: {}, index {}", new_vol, index);
+                        if let Some(vol) = volumes.get(&index) {
+                            vol.store(new_vol, Ordering::SeqCst);
                         }
                     }
                 }
             }
         });
 
-        media_playback.start().await;
+        media_playback.start((seeking_seconds_f32_, cond_)).await;
     }
 }

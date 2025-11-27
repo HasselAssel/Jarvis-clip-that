@@ -1,9 +1,8 @@
-use std::fmt::Debug;
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use ffmpeg_next::frame;
 use tokio::sync::{mpsc as tokio_mpsc, Mutex, Notify};
@@ -41,10 +40,11 @@ impl PlayState {
 
 
 pub trait StreamFrameScheduler<F> {
-    fn insert_frame<'a>(&'a self, frame: F) -> Pin<Box<dyn Future<Output=()> + Send + 'a>>;
-    fn start(&mut self);
+    fn insert_frame<'a>(&'a mut self, frame: F) -> Pin<Box<dyn Future<Output=()> + Send + 'a>>;
+    fn start(&mut self) -> bool;
     fn set_call_back(&mut self, call_back: Arc<AsyncFnType<F>>);
     fn get_play_state(&self) -> Arc<PlayState>;
+    fn get_request_new_channel(&self) -> Arc<AtomicBool>;
 }
 
 
@@ -52,49 +52,72 @@ pub type AsyncFnType<F> = dyn Fn(F) -> Pin<Box<dyn Future<Output=()> + Send>> + 
 
 pub struct FixedRateScheduler<F> {
     schedule_sender: tokio_mpsc::Sender<F>,
-    play_state: Arc<PlayState>,
 
-    data: Option<(tokio_mpsc::Receiver<F>, Arc<AsyncFnType<F>>, Interval)>,
+    play_state: Arc<PlayState>,
+    request_new_channel: Arc<AtomicBool>,
+
+    call_back: Arc<AsyncFnType<F>>,
+    interval: Interval,
+
+    receiver: Option<tokio_mpsc::Receiver<F>>,
 }
 
 impl<F: HasSamples + Send + 'static> StreamFrameScheduler<F> for FixedRateScheduler<F> {
-    fn insert_frame<'a>(&'a self, frame: F) -> Pin<Box<dyn Future<Output=()> + Send + 'a>> {
+    fn insert_frame<'a>(&'a mut self, frame: F) -> Pin<Box<dyn Future<Output=()> + Send + 'a>> {
         Box::pin(async move {
             self.schedule_sender.send(frame).await.unwrap();
         })
     }
 
-    fn start(&mut self) {
-        if let Some((mut rx, call_back, mut ticker)) = self.data.take() {
+    fn start(&mut self) -> bool {
+        if let Some(mut rx) = self.receiver.take() {
             let play_state = self.play_state.clone();
+            let call_back = self.call_back.clone();
+            let mut ticker = tokio::time::interval(self.interval.period());
+            let request_new_channel = self.request_new_channel.clone();
+
             tokio::spawn(async move {
                 while let Some(f) = rx.recv().await {
+                    let samples = f.get_samples();
+
+                    call_back(f).await;
+
+                    if request_new_channel.load(Ordering::SeqCst) {
+                        while let Ok(_) = rx.try_recv() {}
+                        request_new_channel.store(false, Ordering::SeqCst);
+                    }
+
                     if play_state.wait_until_playing().await {
                         ticker.reset();
                     }
-                    for _ in 0..f.get_samples() {
+                    for _ in 0..samples {
                         ticker.tick().await;
                     }
-                    call_back(f).await;
                 }
             });
+            return true;
         }
+        false
     }
 
     fn set_call_back(&mut self, call_back: Arc<AsyncFnType<F>>) {
-        if let Some((_, ref mut c, _)) = &mut self.data {
-            *c = call_back;
-        }
+        self.call_back = call_back;
     }
 
     fn get_play_state(&self) -> Arc<PlayState> {
         self.play_state.clone()
     }
+
+    fn get_request_new_channel(&self) -> Arc<AtomicBool> {
+        self.request_new_channel.clone()
+    }
 }
 
 impl<F: Send + 'static> FixedRateScheduler<F> {
-    pub fn new(rate: f64, max_buffered_seconds: f64, call_back: Arc<AsyncFnType<F>>) -> Self {
-        let (tx, mut rx) = tokio_mpsc::channel((rate * max_buffered_seconds) as usize);
+    pub fn new(rate: f64, max_buffered_seconds: f64, call_back: Arc<AsyncFnType<F>>, request_new_channel: Arc<AtomicBool>) -> Self {
+        let buffer_size = (rate * max_buffered_seconds) as usize;
+        let (tx, rx) = tokio_mpsc::channel(buffer_size);
+
         let duration = Duration::from_secs_f64(1.0 / rate);
         let ticker = tokio::time::interval(duration);
 
@@ -103,7 +126,10 @@ impl<F: Send + 'static> FixedRateScheduler<F> {
         Self {
             schedule_sender: tx,
             play_state,
-            data: Some((rx, call_back, ticker)),
+            request_new_channel,
+            call_back,
+            interval: ticker,
+            receiver: Some(rx),
         }
     }
 }
@@ -116,12 +142,15 @@ pub struct DynRateScheduler<F> {
     buffer_change: Arc<Notify>,
 
     play_state: Arc<PlayState>,
+    request_new_channel: Arc<AtomicBool>,
 
-    data: Option<(tokio_mpsc::UnboundedReceiver<F>, Arc<AsyncFnType<F>>, Arc<Notify>, Arc<Mutex<Duration>>)>,
+    call_back: Arc<AsyncFnType<F>>,
+
+    data: Option<(tokio_mpsc::UnboundedReceiver<F>, Arc<Notify>, Arc<Mutex<Duration>>)>,
 }
 
 impl<F: HasDuration + Send + 'static> StreamFrameScheduler<F> for DynRateScheduler<F> {
-    fn insert_frame<'a>(&'a self, frame: F) -> Pin<Box<dyn Future<Output=()> + Send + 'a>> {
+    fn insert_frame<'a>(&'a mut self, frame: F) -> Pin<Box<dyn Future<Output=()> + Send + 'a>> {
         Box::pin(async {
             let needed_space = frame.get_duration();
             loop {
@@ -138,15 +167,19 @@ impl<F: HasDuration + Send + 'static> StreamFrameScheduler<F> for DynRateSchedul
         })
     }
 
-    fn start(&mut self) {
-        if let Some((mut rx, call_back, buffer_change, current_buffered_secs)) = self.data.take() {
+    fn start(&mut self) -> bool {
+        if let Some((mut rx, buffer_change, current_buffered_secs)) = self.data.take() {
             let play_state = self.play_state.clone();
+            let call_back = self.call_back.clone();
+
             tokio::spawn(async move {
                 while let Some(f) = rx.recv().await {
-                    play_state.wait_until_playing().await;
-                    tokio::time::sleep(f.get_duration()).await;
                     let frame_dur = f.get_duration();
+
                     call_back(f).await;
+                    play_state.wait_until_playing().await;
+                    tokio::time::sleep(frame_dur).await;
+
                     {
                         let mut c_secs = current_buffered_secs.lock().await;
                         *c_secs -= frame_dur;
@@ -154,23 +187,27 @@ impl<F: HasDuration + Send + 'static> StreamFrameScheduler<F> for DynRateSchedul
                     buffer_change.notify_waiters();
                 }
             });
+            return true;
         }
+        false
     }
 
     fn set_call_back(&mut self, call_back: Arc<AsyncFnType<F>>) {
-        if let Some((_, ref mut c, _, _)) = &mut self.data {
-            *c = call_back;
-        }
+        self.call_back = call_back;
     }
 
     fn get_play_state(&self) -> Arc<PlayState> {
         self.play_state.clone()
     }
+
+    fn get_request_new_channel(&self) -> Arc<AtomicBool> {
+        self.request_new_channel.clone()
+    }
 }
 
 impl<F: HasDuration + Send + 'static> DynRateScheduler<F> {
-    pub fn new(max_buffered_seconds: Duration, call_back: Arc<AsyncFnType<F>>) -> Self {
-        let current_buffered_secs = Arc::new(Mutex::new(Duration::default()));
+    pub fn new(max_buffered_seconds: Duration, call_back: Arc<AsyncFnType<F>>, request_new_channel: Arc<AtomicBool>) -> Self {
+        let current_buffered_secs = Arc::new(Mutex::new(Duration::new(0, 0)));
         let current_buffered_secs2 = current_buffered_secs.clone();
 
         let buffer_change = Arc::new(Notify::new());
@@ -178,7 +215,7 @@ impl<F: HasDuration + Send + 'static> DynRateScheduler<F> {
 
         let play_state = Default::default();
 
-        let (tx, mut rx) = tokio_mpsc::unbounded_channel::<F>();
+        let (tx, rx) = tokio_mpsc::unbounded_channel::<F>();
 
         Self {
             schedule_sender: tx,
@@ -186,12 +223,14 @@ impl<F: HasDuration + Send + 'static> DynRateScheduler<F> {
             current_buffered_secs,
             buffer_change,
             play_state,
-            data: Some((rx, call_back, buffer_change2, current_buffered_secs2)),
+            request_new_channel,
+            call_back,
+            data: Some((rx, buffer_change2, current_buffered_secs2)),
         }
     }
 }
 
-trait HasDuration {
+pub trait HasDuration {
     fn get_duration(&self) -> Duration;
 }
 
