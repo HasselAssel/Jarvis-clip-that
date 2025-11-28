@@ -41,9 +41,15 @@ impl Save {
         ring_buffer: &Arc<Mutex<PRB>>,
         parameters: &Parameters,
         is_video_else_audio: bool,
+        title: Option<&str>,
     ) -> Result<()> {
         let ost = &mut self.o_ctx.add_stream(parameters.id())?;
         ost.set_parameters(parameters.clone());
+        if let Some(title) = title {
+            let mut dict = ffmpeg_next::Dictionary::new();
+            dict.set("title", title);
+            ost.set_metadata(dict)
+        }
 
         let tb = match is_video_else_audio {
             true => { (unsafe { *parameters.as_ptr() }.framerate.den, unsafe { *parameters.as_ptr() }.framerate.num) }
@@ -83,7 +89,7 @@ impl Save {
             .reduce(f64::min)
             .unwrap_or(0.0);
 
-        debug_println!("min pts: {}", min_pts_in_base_1_sec);
+        debug_println!("min pts: {}, min dts: {}", min_pts_in_base_1_sec, min_dts_in_base_1_sec);
 
         self.streams.iter_mut().for_each(|(packets, tb)| packets.iter_mut().for_each(|packet| {
             packet.set_pts(packet.pts().map(|pts| (pts as f64 - (tb.1 as f64 / tb.0 as f64) * min_pts_in_base_1_sec) as i64));

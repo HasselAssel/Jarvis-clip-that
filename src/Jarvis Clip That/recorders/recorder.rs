@@ -31,6 +31,7 @@ pub struct Recorder<PRB: PacketRingBuffer> {
     recorder: Option<Box<dyn TRecorder<PRB> + Send>>,
     pub ring_buffer: Arc<Mutex<PRB>>,
     pub parameters: Parameters,
+    pub start_delay_secs: f64,
 }
 
 impl<PRB: PacketRingBuffer> Recorder<PRB> {
@@ -38,21 +39,24 @@ impl<PRB: PacketRingBuffer> Recorder<PRB> {
         recorder: R,
         ring_buffer: Arc<Mutex<PRB>>,
         parameters: Parameters,
+        start_delay_secs: f64,
     ) -> Self {
         let recorder = Box::new(recorder);
-        Self::from_boxed_recorder(recorder, ring_buffer, parameters)
+        Self::from_boxed_recorder(recorder, ring_buffer, parameters, start_delay_secs)
     }
 
     fn from_boxed_recorder(
         recorder: Box<dyn TRecorder<PRB> + Send>,
         ring_buffer: Arc<Mutex<PRB>>,
         parameters: Parameters,
+        start_delay_secs: f64
     ) -> Self {
         let recorder = Some(recorder);
         Self {
             recorder,
             ring_buffer,
             parameters,
+            start_delay_secs,
         }
     }
 
@@ -74,6 +78,7 @@ pub fn create_video_recorder<PRB: PacketRingBuffer + 'static>(
     width: u32,
     height: u32,
     fps: i32,
+    start_delay_secs: f64,
 ) -> Result<Recorder<PRB>> {
     let ring_buffer = PRB::new(min_secs * fps as u32);
     let arc_ring_buffer = Arc::new(Mutex::new(ring_buffer));
@@ -95,7 +100,7 @@ pub fn create_video_recorder<PRB: PacketRingBuffer + 'static>(
                     let parameters = Parameters::from(&encoder);
                     let av_frame = create_av_frame(AV_PIX_FMT_D3D11, width as i32, height as i32, hw_frame_ctx)?;
                     let recorder = VideoRecorder::new(arc_ring_buffer.clone(), d3d11_vs, encoder, MaybeSafeFFIPtrWrapper(av_frame), width, height, fps as f64);
-                    Recorder::from_recorder(recorder, arc_ring_buffer, parameters)
+                    Recorder::from_recorder(recorder, arc_ring_buffer, parameters, start_delay_secs)
                 }
                 VideoCodec::Qsv => {
                     let d3d11_vs = VideoSourceD3d11::new(*monitor_id, QsvAdapter)?;
@@ -104,7 +109,7 @@ pub fn create_video_recorder<PRB: PacketRingBuffer + 'static>(
                     let parameters = Parameters::from(&encoder);
                     let av_frame = create_av_frame(AV_PIX_FMT_QSV, width as i32, height as i32, hw_frame_ctx)?;
                     let recorder = VideoRecorder::new(arc_ring_buffer.clone(), d3d11_vs, encoder, MaybeSafeFFIPtrWrapper(av_frame), width, height, fps as f64);
-                    Recorder::from_recorder(recorder, arc_ring_buffer, parameters)
+                    Recorder::from_recorder(recorder, arc_ring_buffer, parameters, start_delay_secs)
                 }
             }
         }
@@ -117,6 +122,7 @@ pub fn create_audio_recorder<PRB: PacketRingBuffer + 'static>(
     audio_source_type: &AudioSourceType,
     audio_code_c: &AudioCodec,
     min_secs: u32,
+    start_delay_secs: f64,
 ) -> Result<Recorder<PRB>> {
     let create_ring_buffer = |rate| -> Arc<Mutex<PRB>>{
         let ring_buffer = PRB::new(min_secs * rate);
@@ -152,7 +158,7 @@ pub fn create_audio_recorder<PRB: PacketRingBuffer + 'static>(
                     let parameters = Parameters::from(&encoder);
                     let arc_ring_buffer = create_ring_buffer(aac_vs.format.nSamplesPerSec);
                     let recorder = AudioRecorder::new(arc_ring_buffer.clone(), aac_vs, encoder, frame, silent_frame);
-                    Recorder::from_recorder(recorder, arc_ring_buffer, parameters)
+                    Recorder::from_recorder(recorder, arc_ring_buffer, parameters, start_delay_secs)
                 }
             }
         }
@@ -171,7 +177,7 @@ pub fn create_audio_recorder<PRB: PacketRingBuffer + 'static>(
                     let parameters = Parameters::from(&encoder);
                     let arc_ring_buffer = create_ring_buffer(aac_vs.format.nSamplesPerSec);
                     let recorder = AudioRecorder::new(arc_ring_buffer.clone(), aac_vs, encoder, frame, silent_frame);
-                    Recorder::from_recorder(recorder, arc_ring_buffer, parameters)
+                    Recorder::from_recorder(recorder, arc_ring_buffer, parameters, start_delay_secs)
                 }
             }
         }

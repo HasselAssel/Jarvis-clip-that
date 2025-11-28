@@ -15,7 +15,7 @@ use std::{
 };
 use std::ops::Deref;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use windows::Win32::Media::Audio as WinAudio;
 use windows::Win32::System::Variant::VT_BLOB;
 use windows::core::{Interface, HRESULT, IUnknown};
@@ -319,13 +319,15 @@ pub struct AudioProcessWatcher<PRB: PacketRingBuffer> {
 impl<PRB: PacketRingBuffer + 'static> AudioProcessWatcher<PRB> {
     pub fn new(
         audio_codec: AudioCodec,
-        include_tree: bool, min_secs: u32,
+        include_tree: bool,
+        min_secs: u32,
+        start_delay_secs: f64,
     ) -> Result<Self> {
         let audio_recorders = Arc::new(tokio::sync::Mutex::new(HashMap::new()));
         let a = audio_recorders.clone();
         Ok(Self {
             audio_recorders,
-            _audio_process_watcher: Some(_AudioProcessWatcher::new(audio_codec, include_tree, min_secs, a)?),
+            _audio_process_watcher: Some(_AudioProcessWatcher::new(audio_codec, include_tree, min_secs, a, start_delay_secs, Instant::now())?),
         })
     }
 
@@ -344,6 +346,9 @@ struct _AudioProcessWatcher<PRB: PacketRingBuffer> {
     include_tree: bool,
     min_secs: u32,
     audio_recorders: Arc<tokio::sync::Mutex<HashMap<u32, (Recorder<PRB>, String, Arc<AtomicBool>)>>>,
+
+    start_delay_secs: f64,
+    start_instant: Instant,
 }
 
 unsafe impl<PRB: PacketRingBuffer> Send for _AudioProcessWatcher<PRB> {}
@@ -354,6 +359,8 @@ impl<PRB: PacketRingBuffer + 'static> _AudioProcessWatcher<PRB> {
         include_tree: bool,
         min_secs: u32,
         audio_recorders: Arc<tokio::sync::Mutex<HashMap<u32, (Recorder<PRB>, String, Arc<AtomicBool>)>>>,
+        start_delay_secs: f64,
+        start_instant: Instant,
     ) -> Result<Self> {
         let _ = unsafe { windows::Win32::System::Com::CoInitializeEx(None, windows::Win32::System::Com::COINIT_MULTITHREADED) };
         let device_enumerator: IMMDeviceEnumerator = unsafe { CoCreateInstance(&MMDeviceEnumerator, None, CLSCTX_ALL)? };
@@ -368,18 +375,22 @@ impl<PRB: PacketRingBuffer + 'static> _AudioProcessWatcher<PRB> {
             include_tree,
             min_secs,
             audio_recorders,
+
+            start_delay_secs,
+            start_instant,
         })
     }
 
     async unsafe fn try_add_new_process(
         &mut self,
         p_id: u32,
+        start_delay_secs: f64,
     ) -> Option<()> {
         let mut audio_recorders = self.audio_recorders.lock().await;
         if audio_recorders.contains_key(&p_id) {
             return None;
         }
-        let recorder = create_audio_recorder(&AudioSourceType::WasApiProcess { process_id: p_id, include_tree: self.include_tree }, &self.audio_codec, self.min_secs).ok()?;
+        let recorder = create_audio_recorder(&AudioSourceType::WasApiProcess { process_id: p_id, include_tree: self.include_tree }, &self.audio_codec, self.min_secs, start_delay_secs).ok()?;
 
         let p_name = Self::get_process_name(p_id).unwrap_or("UNKNOWN???".into());
 
@@ -423,7 +434,8 @@ impl<PRB: PacketRingBuffer + 'static> _AudioProcessWatcher<PRB> {
 
         tokio::spawn(async move {
             while let Some(p_id) = add_process_rx.recv().await {
-                if let Some(_) = unsafe { self.try_add_new_process(p_id) }.await {
+                let delay = self.start_instant.elapsed().as_secs_f64();
+                if let Some(_) = unsafe { self.try_add_new_process(p_id, delay + self.start_delay_secs) }.await {
                     let mut audio_recorders = self.audio_recorders.lock().await;
                     if let Some((ref mut recorder, _, boo)) = audio_recorders.get_mut(&p_id) {
                         recorder.start_recording(Some(boo.clone()));
