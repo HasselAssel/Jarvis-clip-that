@@ -1,6 +1,6 @@
 #[derive(Debug)]
 pub enum Error {
-    jrNotYetImplemented,
+    NotYetImplemented,
     NonExistentParameterCombination,
 
     Unknown,
@@ -12,6 +12,7 @@ pub enum CustomError {
     FFMPEG(ffmpeg_next::Error),
     WINDOWS(windows::core::Error),
     IO(std::io::Error),
+    TOML(toml::de::Error),
     CUSTOM(Error),
 }
 
@@ -30,6 +31,12 @@ impl From<windows::core::Error> for CustomError {
 impl From<std::io::Error> for CustomError {
     fn from(value: std::io::Error) -> Self {
         CustomError::IO(value)
+    }
+}
+
+impl From<toml::de::Error> for CustomError {
+    fn from(value: toml::de::Error) -> Self {
+        CustomError::TOML(value)
     }
 }
 

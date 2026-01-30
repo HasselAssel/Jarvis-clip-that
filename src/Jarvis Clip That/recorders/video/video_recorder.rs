@@ -14,7 +14,7 @@ use crate::ring_buffer::traits::PacketRingBuffer;
 use crate::types::RecorderJoinHandle;
 use crate::wrappers::MaybeSafeFFIPtrWrapper;
 
-pub struct VideoRecorder<PRB: PacketRingBuffer + 'static, VS: VideoSource + Send + 'static> {
+pub struct VideoRecorder<PRB, VS> {
     ring_buffer: Arc<Mutex<PRB>>,
     video_source: VS,
 
@@ -26,7 +26,7 @@ pub struct VideoRecorder<PRB: PacketRingBuffer + 'static, VS: VideoSource + Send
     av_frame: MaybeSafeFFIPtrWrapper<AVFrame>,
 }
 
-impl<PRB: PacketRingBuffer, VS: VideoSource + Send> VideoRecorder<PRB, VS> {
+impl<PRB, VS> VideoRecorder<PRB, VS> {
     pub fn new(
         ring_buffer: Arc<Mutex<PRB>>,
         video_source: VS,
@@ -50,7 +50,7 @@ impl<PRB: PacketRingBuffer, VS: VideoSource + Send> VideoRecorder<PRB, VS> {
     }
 }
 
-impl<PRB: PacketRingBuffer, VS: VideoSource + Send> TRecorder<PRB> for VideoRecorder<PRB, VS> {
+impl<PRB: PacketRingBuffer + 'static, VS: VideoSource + Send + 'static> TRecorder<PRB> for VideoRecorder<PRB, VS> {
     fn start_capturing(
         mut self: Box<Self>,
         stop_capturing_callback: Option<Arc<AtomicBool>>,

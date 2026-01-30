@@ -12,6 +12,7 @@ mod stream_scheduler;
 mod textures;
 mod editor;
 mod audio_playback;
+mod edit;
 
 fn main() {
     let video_settings = VideoSettings {

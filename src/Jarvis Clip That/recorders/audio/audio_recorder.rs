@@ -10,7 +10,7 @@ use crate::recorders::traits::TRecorder;
 use crate::ring_buffer::traits::PacketRingBuffer;
 use crate::types::{RecorderJoinHandle, Result};
 
-pub struct AudioRecorder<PRB: PacketRingBuffer + 'static, AS: AudioSource + Send + 'static> {
+pub struct AudioRecorder<PRB, AS> {
     ring_buffer: Arc<Mutex<PRB>>,
     audio_source: AS,
 
@@ -19,7 +19,7 @@ pub struct AudioRecorder<PRB: PacketRingBuffer + 'static, AS: AudioSource + Send
     silent_frame: Audio,
 }
 
-impl<PRB: PacketRingBuffer, AS: AudioSource + Send> AudioRecorder<PRB, AS> {
+impl<PRB, AS> AudioRecorder<PRB, AS> {
     pub fn new(
         ring_buffer: Arc<Mutex<PRB>>,
         audio_source: AS,
@@ -38,7 +38,7 @@ impl<PRB: PacketRingBuffer, AS: AudioSource + Send> AudioRecorder<PRB, AS> {
     }
 }
 
-impl<PRB: PacketRingBuffer, AS: AudioSource + Send> TRecorder<PRB> for AudioRecorder<PRB, AS> {
+impl<PRB: PacketRingBuffer + 'static, AS: AudioSource + Send + 'static> TRecorder<PRB> for AudioRecorder<PRB, AS> {
     fn start_capturing(
         mut self: Box<Self>,
         stop_capturing_callback: Option<Arc<AtomicBool>>,

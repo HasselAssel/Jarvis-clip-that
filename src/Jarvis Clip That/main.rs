@@ -14,6 +14,7 @@ mod types;
 mod wrappers;
 mod ring_buffer;
 mod recorders;
+mod config;
 #[path = "../shared_macros.rs"]
 mod shared_macros;
 

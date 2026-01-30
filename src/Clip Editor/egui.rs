@@ -1,7 +1,6 @@
 use std::collections::HashMap;
 use std::ops::RangeInclusive;
 use std::sync::mpsc as sync_mpsc;
-use atomic_float::AtomicF32;
 
 use eframe::{CreationContext, egui, wgpu};
 use eframe::epaint::TextureId;
@@ -13,9 +12,9 @@ use tokio::sync::oneshot;
 use crate::textures;
 
 pub enum GUIMessage {
-    VideoStateChange(Option<bool>),
+    VideoStateChange(bool),
     VideoPosChanged(f32),
-    VolumeChanged(f32, usize),
+    VolumeChanged(f32, Option<usize>),
 }
 
 pub enum WorkerMessage {
@@ -35,7 +34,6 @@ struct VideoUI {
 
     slider_pos: f32,
     slider_range: RangeInclusive<f32>,
-    dragging_rn: bool,
 }
 
 struct AudioTrack {
@@ -51,8 +49,13 @@ pub struct EditorGui {
     message_sender: tokio_mpsc::UnboundedSender<GUIMessage>,
 
     video_ui: VideoUI,
-    audio_uis: HashMap<usize, AudioUI>,
+    audio_ui: AudioUI,
+    track_audio_uis: HashMap<usize, AudioUI>,
+
+    playing: bool,
 }
+
+const DEFAULT_AUDIO_RANGE: RangeInclusive<f32> = 0.0..=4.0;
 
 impl EditorGui {
     pub fn new(
@@ -82,17 +85,37 @@ impl EditorGui {
             texture,
             slider_pos: 0.0,
             slider_range: 0.0..=length,
-            dragging_rn: false,
         };
 
-        let audio_uis = HashMap::new();
+        let audio_ui = AudioUI {
+            volume: 1.0,
+            volume_range: DEFAULT_AUDIO_RANGE,
+        };
+
+        let track_audio_uis = HashMap::new();
 
         Self {
             message_receiver,
             message_sender,
             video_ui,
-            audio_uis,
+            audio_ui,
+            track_audio_uis,
+            playing: false,
         }
+    }
+
+    fn send_play_state(&self) {
+        self.message_sender.send(GUIMessage::VideoStateChange(self.playing)).unwrap();
+    }
+
+    fn set_playing_and_send(&mut self, state: bool) {
+        self.playing = state;
+        self.send_play_state();
+    }
+
+    fn flip_playing_and_send(&mut self) {
+        self.playing = !self.playing;
+        self.send_play_state();
     }
 }
 
@@ -109,11 +132,11 @@ impl eframe::App for EditorGui {
                     }
                 }
                 WorkerMessage::AddAudioTrack(index) => {
-                    self.audio_uis.insert(index,
-                                          AudioUI {
-                                              volume: 0.0,
-                                              volume_range: 0.0..=4.,
-                                          });
+                    self.track_audio_uis.insert(index,
+                                                AudioUI {
+                                                    volume: 1.0,
+                                                    volume_range: DEFAULT_AUDIO_RANGE,
+                                                });
                 }
             }
         }
@@ -123,32 +146,44 @@ impl eframe::App for EditorGui {
 
             ui.group(|ui| {
                 ui.horizontal(|ui| {
-                    if ui.button("GLUTEN TAG").clicked() {
-                        self.message_sender.send(GUIMessage::VideoStateChange(None)).unwrap();
+                    if ui.button(match self.playing {
+                        true => {"⏸"}
+                        false => {"▶"}
+                    }).clicked() {
+                        self.flip_playing_and_send();
                     }
 
-                    let video_slider = ui.add(egui::Slider::new(&mut self.video_ui.slider_pos, self.video_ui.slider_range.clone())
-                        .custom_formatter(|val, _| format!("{:.2}", val))
-                        .text("SECONDS"));
+                    let video_slider = {
+                        let before = ui.style_mut().spacing.slider_width;
+                        ui.style_mut().spacing.slider_width = 500.;
+                        let video_slider = ui.add(egui::Slider::new(&mut self.video_ui.slider_pos, self.video_ui.slider_range.clone())
+                            .custom_formatter(|val, _| format!("{:.2}", val))
+                            .text("SECONDS"));
+                        ui.style_mut().spacing.slider_width = before;
+                        video_slider
+                    };
 
                     if video_slider.drag_started() {
-                        self.video_ui.dragging_rn = true;
-                        self.message_sender.send(GUIMessage::VideoStateChange(Some(false))).unwrap();
+                        self.set_playing_and_send(false);
                     }
 
                     if video_slider.drag_stopped() {
-                        self.video_ui.dragging_rn = false;
                         self.message_sender.send(GUIMessage::VideoPosChanged(self.video_ui.slider_pos)).unwrap();
-                        self.message_sender.send(GUIMessage::VideoStateChange(Some(true))).unwrap();
+                        self.set_playing_and_send(true);
                     }
-                    /*if !self.video_ui.dragging_rn {
-                        self.video_ui.slider_pos = new idk!
-                    }*/
+
+                    let volume_slider = ui.add(egui::Slider::new(&mut self.audio_ui.volume, self.audio_ui.volume_range.clone())
+                        .custom_formatter(|val, _| format!("{:.2}", val))
+                        .text("VOLUME"));
+
+                    if volume_slider.changed() {
+                        self.message_sender.send(GUIMessage::VolumeChanged(self.audio_ui.volume, None)).unwrap();//TODO
+                    }
                 });
             });
 
 
-            for (index, audio_ui) in &mut self.audio_uis {
+            for (index, audio_ui) in &mut self.track_audio_uis {
                 ui.group(|ui| {
                     ui.strong(format!("Audio {}", index));
 
@@ -156,8 +191,8 @@ impl eframe::App for EditorGui {
                         .custom_formatter(|val, _| format!("{:.2}", val))
                         .text("VOLUME"));
 
-                    if volume_slider.dragged() || volume_slider.drag_stopped() {
-                        self.message_sender.send(GUIMessage::VolumeChanged(audio_ui.volume, *index)).unwrap();//TODO
+                    if volume_slider.changed() {
+                        self.message_sender.send(GUIMessage::VolumeChanged(audio_ui.volume, Some(*index))).unwrap();//TODO
                     }
                 });
             }

@@ -13,13 +13,14 @@ pub struct LiveSource {
     pub sample_rate: u32,
     pub channels: u16,
     pub volume: Arc<AtomicF32>,
+    pub gloabl_volume: Arc<AtomicF32>,
 }
 
 impl Iterator for LiveSource {
     type Item = f32;
 
     fn next(&mut self) -> Option<Self::Item> {
-        self.receiver.recv().ok().map(|s| s * &self.volume.load(Ordering::SeqCst))
+        self.receiver.recv().ok().map(|s| s * &self.volume.load(Ordering::SeqCst) * &self.gloabl_volume.load(Ordering::SeqCst))
     }
 }
 

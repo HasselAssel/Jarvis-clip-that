@@ -87,7 +87,7 @@ impl MediaPlayback {
         }
     }
 
-    pub async fn dummy_callback_insert(&mut self, ctx: eframe::egui::Context, video_sender: &std::sync::mpsc::Sender<WorkerMessage>) -> HashMap<usize, Arc<AtomicF32>> {
+    pub async fn dummy_callback_insert(&mut self, ctx: eframe::egui::Context, video_sender: &std::sync::mpsc::Sender<WorkerMessage>) -> (Arc<AtomicF32>, HashMap<usize, Arc<AtomicF32>>) {
         if let Some((i, stream)) = self.video_streams.iter_mut().find(|(_, _)| true) {
             let time_base = self.media.streams.get(i).and_then(|stream_info| unsafe {
                 let rational = (*stream_info.parameters.as_ptr()).framerate;
@@ -109,6 +109,7 @@ impl MediaPlayback {
         };
 
         let mut volumes = HashMap::new();
+        let global_volume = Arc::new(AtomicF32::new(0.5));
         for (i, stream) in &mut self.audio_streams {
             if let Some(stream_info) = self.media.streams.get(&i) {
                 let (tx, rx) = std::sync::mpsc::channel();
@@ -117,14 +118,16 @@ impl MediaPlayback {
                     let sample_rate = unsafe { (*stream_info.parameters.as_ptr()).sample_rate };
                     let channels = 1; //FOR SOME REASON IDK???!?!?!? MAYBE CAUSE THE DATA IS PLANAR??????ANYYWAY; MAYBE THE FFMPEG GODS????????????????????????????????????????????????????????????????????????????????????????//let channels = unsafe { (*stream_info.parameters.as_ptr()).ch_layout.nb_channels };
 
-                    let volume = Arc::new(AtomicF32::new(0.5));
+                    let volume = Arc::new(AtomicF32::new(1.));
                     let volume_ = volume.clone();
+                    let global_volume_ = global_volume.clone();
                     volumes.insert(*i, volume);
                     let source = LiveSource {
                         receiver: rx,
                         sample_rate: sample_rate as u32,
                         channels,
                         volume: volume_,
+                        gloabl_volume: global_volume_,
                     };
                     thread::spawn(|| {
                         let (_stream, stream_handle) = OutputStream::try_default().unwrap();
@@ -148,7 +151,7 @@ impl MediaPlayback {
                 stream.stream_scheduler.set_call_back(audio_call_back);
             }
         }
-        volumes
+        (global_volume, volumes)
     }
 
     pub fn get_handles(&self) -> HashMap<usize, StreamHandle> {

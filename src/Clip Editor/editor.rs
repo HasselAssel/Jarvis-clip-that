@@ -42,7 +42,8 @@ impl ClipEditor {
         let worker_message_receiver = self._worker_message_receiver.take().unwrap();
         let gui_message_sender = self._gui_message_sender.take().unwrap();
 
-        let media = Media::open_file("out/Chat Clip That_20250818_004213.mp4");
+        let media = Media::open_file("out/Chat Clip That_20251121_002245.mp4");
+        //let media = Media::open_file("out/Chat Clip That_20250818_004213.mp4");
         //let media = Media::open_file("out/Marvel-Rivals__2025-03-13__20-58-48.mp4");
 
         let media_dur = media.ictx.duration();
@@ -82,7 +83,7 @@ impl ClipEditor {
         let cond_ = cond.clone();
 
         let mut media_playback = MediaPlayback::new(media, self.video_settings, self.audio_settings, 3.0);
-        let volumes = media_playback.dummy_callback_insert(ctx, &self.worker_message_sender).await;
+        let (global_volume, volumes) = media_playback.dummy_callback_insert(ctx, &self.worker_message_sender).await;
         for (index, _) in &volumes {
             self.worker_message_sender.send(WorkerMessage::AddAudioTrack(*index)).unwrap();
         }
@@ -94,11 +95,7 @@ impl ClipEditor {
                     GUIMessage::VideoStateChange(state) => {
                         for (_, handle) in &mut video_handles {
                             eprintln!("VideoStateChange");
-                            if let Some(state) = state {
-                                handle.set_state(state);
-                            } else {
-                                handle.change_state();
-                            }
+                            handle.set_state(state);
                         }
                     }
                     GUIMessage::VideoPosChanged(pos) => {
@@ -110,9 +107,14 @@ impl ClipEditor {
                         cond.store(true, Ordering::SeqCst);
                     }
                     GUIMessage::VolumeChanged(new_vol, index) => {
-                        eprintln!("VolumeChanged: {}, index {}", new_vol, index);
-                        if let Some(vol) = volumes.get(&index) {
-                            vol.store(new_vol, Ordering::SeqCst);
+                        eprintln!("VolumeChanged: {}, index {:?}", new_vol, index);
+                        if let Some(index) = index {
+                            if let Some(vol) = volumes.get(&index) {
+                                vol.store(new_vol, Ordering::SeqCst);
+                            }
+                        } else {
+                            eprintln!("global_volume: {}", new_vol);
+                            global_volume.store(new_vol, Ordering::SeqCst);
                         }
                     }
                 }
