@@ -1,3 +1,1 @@
-pub struct Edit {
-
-}
+pub struct Edit {}

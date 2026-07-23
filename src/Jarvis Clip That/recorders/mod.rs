@@ -1,6 +1,5 @@
-pub mod traits;
-pub mod recorder;
-pub mod audio;
-pub mod video;
-pub mod frame;
-pub mod save;
+mod sources;
+mod traits;
+mod converter;
+mod encoders;
+mod env;

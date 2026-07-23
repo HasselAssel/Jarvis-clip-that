@@ -27,6 +27,13 @@ atomic_float = "1.1.0"
 serde = { version = "1.0", features = ["derive"] }
 toml = "0.8"
 
+anyhow = "1.0"
+thiserror = "2.0"
+
+[[bin]]
+name = "jarvis-clip-that-old"
+path = "src/Jarvis Clip That old/main.rs"
+
 [[bin]]
 name = "jarvis-clip-that"
 path = "src/Jarvis Clip That/main.rs"

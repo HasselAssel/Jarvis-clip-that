@@ -1,8 +1,10 @@
+use std::sync::atomic::AtomicBool;
+use std::sync::atomic::Ordering;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
 
 use crate::decoders::FfmpegDecoder;
-use crate::stream_scheduler::{PlayState, StreamFrameScheduler};
+use crate::stream_scheduler::PlayState;
+use crate::stream_scheduler::StreamFrameScheduler;
 
 pub struct StreamHandle {
     play_state: Arc<PlayState>,
@@ -32,7 +34,10 @@ pub struct Stream<D: FfmpegDecoder> {
 }
 
 impl<D: FfmpegDecoder> Stream<D> {
-    pub fn new(decoder: D, stream_scheduler: Box<dyn StreamFrameScheduler<D::DecodedFrame>>) -> Self {
+    pub fn new(
+        decoder: D,
+        stream_scheduler: Box<dyn StreamFrameScheduler<D::DecodedFrame>>,
+    ) -> Self {
         let play_state = stream_scheduler.get_play_state();
         let request_new_channel = stream_scheduler.get_request_new_channel();
         Self {

@@ -1,29 +1,21 @@
-use std::sync::{Arc, Mutex};
-use std::sync::atomic::AtomicBool;
-use ffmpeg_next::codec;
-use crate::ring_buffer::traits::PacketRingBuffer;
-use crate::types::{Packet, Result, RecorderJoinHandle};
+use anyhow::Result;
 
-pub trait TRecorder<PRB: PacketRingBuffer> {
-    fn start_capturing(self: Box<Self>, stop_capturing_callback: Option<Arc<AtomicBool>>) -> RecorderJoinHandle;
+pub trait Source {
+    type Env<'e>;
+    type Output<'o> where Self: 'o;
+    fn next_frame(&mut self, env: Self::Env<'_>) -> Result<Self::Output<'_>>;
 }
 
-pub fn send_frame_and_receive_packets<PRB: PacketRingBuffer>(
-    ring_buffer: &Arc<Mutex<PRB>>,
-    encoder: &mut codec::encoder::Encoder,
-    frame: &ffmpeg_next::Frame,
-    mut duration: i64,
-) -> Result<()> {
-    encoder.send_frame(frame)?;
+pub trait Converter {
+    type Env<'e>;
+    type Input<'i>;
+    type Output<'o> where Self: 'o;
+    fn convert(&mut self, input: Self::Input<'_>, env: Self::Env<'_>) -> Result<Self::Output<'_>>;
+}
 
-    let mut packet = Packet::empty();
-    let mut ring_buffer = ring_buffer.lock().unwrap();
-    while encoder.receive_packet(&mut packet).is_ok() {
-        let mut packet_clone = packet.clone();
-        packet_clone.set_duration(duration);
-        ring_buffer.insert(packet_clone);
-        duration = 0;
-    }
-    drop(ring_buffer);
-    Ok(())
+pub trait Encoder {
+    type Env<'e>;
+    type Input<'i>;
+    type Output<'o> where Self: 'o;
+    fn encode(&mut self, input: Self::Input<'_>, env: Self::Env<'_>) -> Result<Self::Output<'_>>;
 }
