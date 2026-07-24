@@ -1,1 +1,1 @@
-pub mod d3d11;
+pub(crate) mod d3d11;
