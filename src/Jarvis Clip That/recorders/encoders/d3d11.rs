@@ -59,7 +59,11 @@ impl Encoder for EncoderD3D11 {
     type Input<'i> = ID3D11Texture2D;
     type Output<'o> = Vec<Packet>;
 
-    fn encode(&mut self, input: Self::Input<'_>, _: Self::Env<'_>) -> Result<Self::Output<'_>> {
+    fn encode(
+        &mut self,
+        input: Self::Input<'_>,
+        _: Self::Env<'_>
+    ) -> Result<Self::Output<'_>> {
         insert_texture_into_frame(self.av_frame, &input)?;
 
         self.encoder.send_frame(&self.frame)?;
@@ -183,13 +187,13 @@ fn setup_hw_and_frame_ctx(
 }
 
 pub fn create_encoder_d3d11(
-    mut enc: ffmpeg_next::codec::encoder::video::Video,
+    mut enc: encoder::video::Video,
     codec: codec::Codec,
     (hw_device_ctx, hw_frame_ctx): (Option<*mut AVBufferRef>, *mut AVBufferRef),
     width: u32,
     height: u32,
     fps: i32,
-) -> Result<ffmpeg_next::encoder::video::Encoder> {
+) -> Result<encoder::video::Encoder> {
     let raw_ctx = unsafe { enc.as_mut_ptr() };
     if raw_ctx.is_null() {
         bail!("raw_ctx is null");
