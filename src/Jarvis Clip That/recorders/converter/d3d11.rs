@@ -23,7 +23,7 @@ pub struct BgraToNv12Converter {
 
 
 impl BgraToNv12Converter {
-    pub fn new((input_width, input_height) : (u32, u32), (output_width, output_height) : (u32, u32), env: <Self as Converter>::Env<'_>) -> Result<Self> {
+    pub fn new((input_width, input_height): (u32, u32), (output_width, output_height): (u32, u32), env: <Self as Converter>::Env<'_>) -> Result<Self> {
         if input_width == 0 || input_height == 0 {
             bail!("input dimensions must be nonzero, got {}x{}", input_width, input_height);
         }
