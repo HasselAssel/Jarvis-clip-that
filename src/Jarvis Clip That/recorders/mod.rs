@@ -1,7 +1,8 @@
-pub(crate) mod sources;
 pub(crate) mod traits;
-pub(crate) mod converter;
-pub(crate) mod encoders;
-pub(crate) mod env;
 mod recorder;
-mod settings;
+mod config;
+#[cfg(target_os = "windows")]
+pub(crate) mod windows;
+
+#[cfg(target_os = "linux")]
+pub(crate) mod linux;

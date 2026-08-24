@@ -12,8 +12,8 @@ where
     for<'e> S: Source<Env<'e> = Env>,
     for<'e> C: Converter<Env<'e> = Env>,
     for<'e> E: Encoder<Env<'e> = Env>,
-    for<'a> S: Source<Output<'a> = <C as Converter>::Input<'a>,>,
-    for<'a> C: Converter<Output<'a> = <E as Encoder>::Input<'a>,>,
+    for<'a> S: Source<Output<'a> = <C as Converter>::Input<'a>>,
+    for<'a> C: Converter<Output<'a> = <E as Encoder>::Input<'a>>,
 {
     pub fn new(
         env: Env,
@@ -28,4 +28,4 @@ where
             encoder,
         }
     }
-} 
+}

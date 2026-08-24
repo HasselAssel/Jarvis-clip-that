@@ -10,7 +10,7 @@ use windows::Win32::Graphics::Dxgi::IDXGIOutputDuplication;
 use windows::Win32::Graphics::Dxgi::IDXGIResource;
 use windows_core::Interface;
 
-use crate::recorders::env::EnvD3D11;
+use crate::recorders::windows::d3d11::env::EnvD3D11;
 use crate::recorders::traits::Source;
 
 pub struct SourceD3d11 {

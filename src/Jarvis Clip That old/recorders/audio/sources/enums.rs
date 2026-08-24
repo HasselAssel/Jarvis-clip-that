@@ -7,3 +7,4 @@ pub enum AudioSourceType {
     WasApiProcess { process_id: u32, include_tree: bool },
     WasApiDefaultInput,
 }
+AudioSourceType

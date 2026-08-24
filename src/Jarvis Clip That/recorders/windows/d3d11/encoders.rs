@@ -11,7 +11,7 @@ use ffmpeg_next::util::frame::video;
 use windows::Win32::Graphics::Direct3D11::{ID3D11Device, ID3D11Texture2D};
 use windows_core::Interface;
 
-use crate::recorders::env::EnvD3D11;
+use crate::recorders::windows::d3d11::env::EnvD3D11;
 use crate::recorders::traits::Encoder;
 
 pub struct EncoderD3D11 {

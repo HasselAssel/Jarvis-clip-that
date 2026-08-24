@@ -6,8 +6,8 @@ use windows::Win32::Graphics::Direct3D11::{D3D11_BIND_RENDER_TARGET, D3D11_TEX2D
 use windows::Win32::Graphics::Dxgi::Common::{DXGI_FORMAT_B8G8R8A8_UNORM, DXGI_FORMAT_NV12, DXGI_RATIONAL, DXGI_SAMPLE_DESC};
 use windows_core::Interface;
 
-use crate::recorders::env::EnvD3D11;
-use crate::recorders::sources::d3d11::AcquiredFrame;
+use crate::recorders::windows::d3d11::env::EnvD3D11;
+use crate::recorders::windows::d3d11::sources::AcquiredFrame;
 use crate::recorders::traits::Converter;
 
 pub struct BgraToNv12Converter {

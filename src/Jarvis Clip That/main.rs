@@ -1,4 +1,4 @@
-use std::path::Path;
+/*use std::path::Path;
 use std::thread;
 use std::time::Duration;
 
@@ -11,13 +11,14 @@ use ffmpeg_next::{
     Rational,
 };
 
-use crate::recorders::converter::d3d11::BgraToNv12Converter;
-use crate::recorders::encoders::d3d11::EncoderD3D11;
-use crate::recorders::env::d3d11::EnvD3D11;
-use crate::recorders::sources::d3d11::SourceD3d11;
+use crate::recorders::windows::d3d11::converters::BgraToNv12Converter;
+use crate::recorders::windows::d3d11::encoders::EncoderD3D11;
+use crate::recorders::windows::d3d11::env::EnvD3D11;
+use crate::recorders::windows::d3d11::sources::SourceD3d11;
 use crate::recorders::traits::{Converter, Encoder, Source};
 
 mod recorders;
+#[path = "../macros.rs"]
 mod macros;
 
 fn main() -> Result<()> {
@@ -173,4 +174,10 @@ pub fn save_packets_to_mp4<P: AsRef<Path>>(
         .context("failed to finalize MP4 file")?;
 
     Ok(())
+}*/
+
+mod recorders;
+
+pub fn main() {
+
 }

@@ -17,8 +17,8 @@ mod config;
 mod error;
 mod recorders;
 mod ring_buffer;
-#[path = "../shared_macros.rs"]
-mod shared_macros;
+#[path = "../macros.rs"]
+mod macros;
 mod types;
 mod wrappers;
 
