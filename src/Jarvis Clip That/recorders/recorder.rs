@@ -1,3 +1,5 @@
+use anyhow::Result;
+
 use crate::recorders::traits::{Converter, Encoder, Source};
 
 pub struct Recorder<Env, S, C, E> {
@@ -27,5 +29,11 @@ where
             converter,
             encoder,
         }
+    }
+
+    pub fn next(&mut self) -> Result<<E as Encoder>::Output<'_>>{
+        let source_frame = self.source.next_frame(&self.env)?;
+        let converted_frame = self.converter.convert(source_frame, &self.env)?;
+        self.encoder.encode(converted_frame, &self.env)
     }
 }

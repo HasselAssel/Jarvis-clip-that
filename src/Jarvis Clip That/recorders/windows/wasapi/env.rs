@@ -1,36 +1,23 @@
-use anyhow::Result;
 use std::collections::HashMap;
 use std::collections::VecDeque;
 use std::mem::ManuallyDrop;
 use std::ops::Deref;
 use std::pin::Pin;
+use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
-use std::sync::Arc;
 use std::sync::Condvar;
 use std::sync::Mutex;
 use std::time::Duration;
 use std::time::Instant;
 
+use anyhow::{anyhow, bail, Context, Result};
 use ffmpeg_next::encoder::audio::Encoder;
 use ffmpeg_next::frame::Audio;
-use windows::core::IUnknown;
-use windows::core::Interface;
 use windows::core::HRESULT;
+use windows::core::Interface;
+use windows::core::IUnknown;
 use windows::Win32::Media::Audio as WinAudio;
-use windows::Win32::Media::Audio::eCapture;
-use windows::Win32::Media::Audio::eConsole;
-use windows::Win32::Media::Audio::eMultimedia;
-use windows::Win32::Media::Audio::eRender;
-use windows::Win32::Media::Audio::AudioSessionDisconnectReason;
-use windows::Win32::Media::Audio::AudioSessionState;
-use windows::Win32::Media::Audio::AudioSessionStateExpired;
-use windows::Win32::Media::Audio::IAudioCaptureClient;
-use windows::Win32::Media::Audio::IAudioClient;
-use windows::Win32::Media::Audio::IAudioSessionControl2;
-use windows::Win32::Media::Audio::IAudioSessionManager2;
-use windows::Win32::Media::Audio::IMMDeviceEnumerator;
-use windows::Win32::Media::Audio::MMDeviceEnumerator;
 use windows::Win32::Media::Audio::AUDCLNT_SHAREMODE_SHARED;
 use windows::Win32::Media::Audio::AUDCLNT_STREAMFLAGS_EVENTCALLBACK;
 use windows::Win32::Media::Audio::AUDCLNT_STREAMFLAGS_LOOPBACK;
@@ -38,23 +25,37 @@ use windows::Win32::Media::Audio::AUDIOCLIENT_ACTIVATION_PARAMS;
 use windows::Win32::Media::Audio::AUDIOCLIENT_ACTIVATION_PARAMS_0;
 use windows::Win32::Media::Audio::AUDIOCLIENT_ACTIVATION_TYPE_PROCESS_LOOPBACK;
 use windows::Win32::Media::Audio::AUDIOCLIENT_PROCESS_LOOPBACK_PARAMS;
+use windows::Win32::Media::Audio::AudioSessionDisconnectReason;
+use windows::Win32::Media::Audio::AudioSessionState;
+use windows::Win32::Media::Audio::AudioSessionStateExpired;
+use windows::Win32::Media::Audio::eCapture;
+use windows::Win32::Media::Audio::eConsole;
+use windows::Win32::Media::Audio::eMultimedia;
+use windows::Win32::Media::Audio::eRender;
+use windows::Win32::Media::Audio::IAudioCaptureClient;
+use windows::Win32::Media::Audio::IAudioClient;
+use windows::Win32::Media::Audio::IAudioSessionControl2;
+use windows::Win32::Media::Audio::IAudioSessionManager2;
+use windows::Win32::Media::Audio::IMMDeviceEnumerator;
+use windows::Win32::Media::Audio::MMDeviceEnumerator;
 use windows::Win32::Media::Audio::PROCESS_LOOPBACK_MODE_EXCLUDE_TARGET_PROCESS_TREE;
 use windows::Win32::Media::Audio::PROCESS_LOOPBACK_MODE_INCLUDE_TARGET_PROCESS_TREE;
 use windows::Win32::Media::Audio::WAVEFORMATEX;
 use windows::Win32::Media::Audio::WAVEFORMATEXTENSIBLE;
 use windows::Win32::Media::Audio::WAVEFORMATEXTENSIBLE_0;
-use windows::Win32::System::Com::CoCreateInstance;
+use windows::Win32::Media::KernelStreaming::WAVE_FORMAT_EXTENSIBLE;
+use windows::Win32::System::Com::{CoCreateInstance, CoTaskMemFree};
+use windows::Win32::System::Com::BLOB;
+use windows::Win32::System::Com::CLSCTX_ALL;
 use windows::Win32::System::Com::StructuredStorage::PROPVARIANT;
 use windows::Win32::System::Com::StructuredStorage::PROPVARIANT_0;
 use windows::Win32::System::Com::StructuredStorage::PROPVARIANT_0_0;
 use windows::Win32::System::Com::StructuredStorage::PROPVARIANT_0_0_0;
-use windows::Win32::System::Com::BLOB;
-use windows::Win32::System::Com::CLSCTX_ALL;
 use windows::Win32::System::Performance::QueryPerformanceCounter;
 use windows::Win32::System::Performance::QueryPerformanceFrequency;
 use windows::Win32::System::Threading::CreateEventW;
-use windows::Win32::System::Threading::WaitForSingleObject;
 use windows::Win32::System::Threading::INFINITE;
+use windows::Win32::System::Threading::WaitForSingleObject;
 use windows::Win32::System::Variant::VT_BLOB;
 use windows_core::BOOL;
 use windows_core::GUID;
@@ -62,7 +63,7 @@ use windows_core::PCWSTR;
 
 pub struct EnvWasapi {
     client: IAudioClient,
-    format: WAVEFORMATEXTENSIBLE,
+    pub(crate) format: WAVEFORMATEXTENSIBLE,
 }
 
 impl EnvWasapi {
@@ -310,9 +311,29 @@ fn get_owned_mix_format(
     {
         bail!(
             "expected WAVE_FORMAT_EXTENSIBLE, got format tag {}",
-            format.Format.wFormatTag
+            {let σ = format.Format.wFormatTag; σ}
         );
     }
 
     Ok(format)
+}
+
+#[windows_core::implement(WinAudio::IActivateAudioInterfaceCompletionHandler)]
+struct Handler {
+    pair: Arc<(Mutex<bool>, Condvar)>,
+}
+
+#[allow(non_snake_case)]
+impl WinAudio::IActivateAudioInterfaceCompletionHandler_Impl for Handler_Impl {
+    fn ActivateCompleted(
+        &self,
+        _operation: windows::core::Ref<'_, WinAudio::IActivateAudioInterfaceAsyncOperation>,
+    ) -> windows::core::Result<()> {
+        let (lock, cvar) = &*self.pair;
+        let mut guard = lock.lock().unwrap();
+        *guard = true;
+        cvar.notify_all();
+
+        Ok(())
+    }
 }

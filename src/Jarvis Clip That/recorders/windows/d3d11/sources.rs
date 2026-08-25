@@ -21,7 +21,7 @@ pub struct SourceD3d11 {
 }
 
 impl SourceD3d11 {
-    pub fn new(monitor: u32, env: <Self  as Source>::Env<'_>) -> Result<Self> {
+    pub fn new(monitor: u32, env: &<Self  as Source>::Env<'_>) -> Result<Self> {
         let adapter: IDXGIAdapter;
         let output: IDXGIOutput;
         let duplication: IDXGIOutputDuplication;
@@ -49,12 +49,12 @@ impl SourceD3d11 {
 }
 
 impl Source for SourceD3d11 {
-    type Env<'e> = &'e EnvD3D11;
+    type Env<'e> = EnvD3D11;
     type Output<'o> = AcquiredFrame<'o>;
 
     fn next_frame(
         &mut self,
-        _: Self::Env<'_>
+        _: &Self::Env<'_>
     ) -> Result<Self::Output<'_>> {
         // TODO: Fix First Frame always being Green (for some reason the first duplication.AcquireNextFrame call generates no IDXGIResource)
 

@@ -26,7 +26,7 @@ impl EncoderD3D11 {
         fps: i32,
         enc: encoder::video::Video,
         codec: codec::Codec,
-        env: <Self as Encoder>::Env<'_>,
+        env: &<Self as Encoder>::Env<'_>,
     ) -> Result<Self> {
         let i_width = i32::try_from(width).with_context(|| format!("height exceeds i32::MAX: {width}"))?;
         let i_height = i32::try_from(height).with_context(|| format!("height exceeds i32::MAX: {height}"))?;
@@ -55,14 +55,14 @@ impl EncoderD3D11 {
 }
 
 impl Encoder for EncoderD3D11 {
-    type Env<'e> = &'e EnvD3D11;
+    type Env<'e> = EnvD3D11;
     type Input<'i> = ID3D11Texture2D;
     type Output<'o> = Vec<Packet>;
 
     fn encode(
         &mut self,
         input: Self::Input<'_>,
-        _: Self::Env<'_>
+        _: &Self::Env<'_>
     ) -> Result<Self::Output<'_>> {
         insert_texture_into_frame(self.av_frame, &input)?;
 

@@ -23,7 +23,7 @@ pub struct BgraToNv12Converter {
 
 
 impl BgraToNv12Converter {
-    pub fn new((input_width, input_height): (u32, u32), (output_width, output_height): (u32, u32), env: <Self as Converter>::Env<'_>) -> Result<Self> {
+    pub fn new((input_width, input_height): (u32, u32), (output_width, output_height): (u32, u32), env: &<Self as Converter>::Env<'_>) -> Result<Self> {
         if input_width == 0 || input_height == 0 {
             bail!("input dimensions must be nonzero, got {}x{}", input_width, input_height);
         }
@@ -142,14 +142,14 @@ impl BgraToNv12Converter {
 }
 
 impl Converter for BgraToNv12Converter {
-    type Env<'e> = &'e EnvD3D11;
+    type Env<'e> = EnvD3D11;
     type Input<'i> = AcquiredFrame<'i>;
     type Output<'o> = ID3D11Texture2D;
 
     fn convert(
         &mut self,
         input: Self::Input<'_>,
-        env: Self::Env<'_>
+        env: &Self::Env<'_>
     ) -> Result<Self::Output<'_>> {
         let texture_bgra = input.texture().ok_or_else(|| anyhow!("No Texture provided"))?;
 
