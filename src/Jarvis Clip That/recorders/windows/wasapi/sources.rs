@@ -74,7 +74,7 @@ impl Source for SourceWasapi {
             )
         };
 
-        Ok((buffer, qpc_pos))
+        Ok((buffer, device_pos))
     }
 }
 

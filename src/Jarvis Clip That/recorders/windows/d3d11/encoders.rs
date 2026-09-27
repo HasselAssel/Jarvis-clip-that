@@ -4,15 +4,15 @@ use anyhow::{bail, Context, Result};
 use ffmpeg_next::codec::{codec, Parameters};
 use ffmpeg_next::codec::encoder;
 use ffmpeg_next::codec::Flags;
-use ffmpeg_next::ffi::{av_buffer_create, av_buffer_ref, av_buffer_unref, av_frame_alloc, av_hwdevice_ctx_alloc, av_hwdevice_ctx_init, av_hwframe_ctx_alloc, av_hwframe_ctx_init, av_hwframe_get_buffer, AVBufferRef, AVFrame, AVHWDeviceContext, AVHWDeviceType, AVHWFramesContext, AVPixelFormat};
+use ffmpeg_next::ffi::{av_buffer_create, av_buffer_ref, av_buffer_unref, av_frame_alloc, av_hwdevice_ctx_alloc, av_hwdevice_ctx_init, av_hwframe_ctx_alloc, av_hwframe_ctx_init, av_hwframe_get_buffer, AVBufferRef, AVFrame, AVHWDeviceContext, AVHWDeviceType, AVHWFramesContext};
 use ffmpeg_next::Packet;
-use ffmpeg_next::sys::AVPixelFormat::AV_PIX_FMT_D3D11;
+use ffmpeg_next::sys::AVPixelFormat;
 use ffmpeg_next::util::frame::video;
 use windows::Win32::Graphics::Direct3D11::{ID3D11Device, ID3D11Texture2D};
 use windows_core::Interface;
 
-use crate::recorders::windows::d3d11::env::EnvD3D11;
 use crate::recorders::traits::Encoder;
+use crate::recorders::windows::d3d11::env::EnvD3D11;
 
 pub struct EncoderD3D11 {
     encoder: encoder::video::Encoder,
@@ -31,7 +31,7 @@ impl EncoderD3D11 {
         let i_width = i32::try_from(width).with_context(|| format!("height exceeds i32::MAX: {width}"))?;
         let i_height = i32::try_from(height).with_context(|| format!("height exceeds i32::MAX: {height}"))?;
         let (hw_device_ctx, hw_frame_ctx) = setup_hw_and_frame_ctx(&env.device, i_width, i_height)?;
-        let encoder = create_encoder_d3d11(
+        let encoder = new_video_encoder_d3d11(
             enc,
             codec,
             (Some(hw_device_ctx), hw_frame_ctx),
@@ -39,7 +39,7 @@ impl EncoderD3D11 {
             height,
             fps
         )?;
-        let av_frame = create_av_frame(AV_PIX_FMT_D3D11, i_width, i_height, hw_frame_ctx)?;
+        let av_frame = create_av_frame(AVPixelFormat::AV_PIX_FMT_D3D11, i_width, i_height, hw_frame_ctx)?;
         let frame = unsafe { video::Video::wrap(av_frame) };
 
         Ok(Self {
@@ -186,7 +186,7 @@ fn setup_hw_and_frame_ctx(
     Ok((hw_device_ctx, hw_frame_ctx))
 }
 
-pub fn create_encoder_d3d11(
+pub fn new_video_encoder_d3d11(
     mut enc: encoder::video::Video,
     codec: codec::Codec,
     (hw_device_ctx, hw_frame_ctx): (Option<*mut AVBufferRef>, *mut AVBufferRef),

@@ -1,3 +1,5 @@
+use anyhow::Result;
+
 use crate::recorders::traits::Converter;
 use crate::recorders::windows::wasapi::env::EnvWasapi;
 
@@ -20,7 +22,8 @@ impl Converter for ConverterWasapi {
     type Input<'i> = (&'i [u8], u64);
     type Output<'o> = (&'o [u8], u64);
 
-    fn convert<'a>(&'a mut self, input: Self::Input<'a>, env: &Self::Env<'_>) -> anyhow::Result<Self::Output<'a>> {
+    fn convert<'a>(&'a mut self, input: Self::Input<'a>, _: &Self::Env<'_>) -> Result<Self::Output<'a>> {
+        // todo: change frequency if wanted.
         Ok(input)
     }
 }

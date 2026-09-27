@@ -103,8 +103,7 @@ fn create_default_iaudioclient(
             None,
             CLSCTX_ALL,
         )
-    }
-        .context("failed to create MMDeviceEnumerator")?;
+    }.context("failed to create MMDeviceEnumerator")?;
 
     let data_flow = if render_else_capture {
         eRender
