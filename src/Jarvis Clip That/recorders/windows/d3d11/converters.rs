@@ -6,9 +6,9 @@ use windows::Win32::Graphics::Direct3D11::{D3D11_BIND_RENDER_TARGET, D3D11_TEX2D
 use windows::Win32::Graphics::Dxgi::Common::{DXGI_FORMAT_B8G8R8A8_UNORM, DXGI_FORMAT_NV12, DXGI_RATIONAL, DXGI_SAMPLE_DESC};
 use windows_core::Interface;
 
+use crate::recorders::traits::Converter;
 use crate::recorders::windows::d3d11::env::EnvD3D11;
 use crate::recorders::windows::d3d11::sources::AcquiredFrame;
-use crate::recorders::traits::Converter;
 
 pub struct BgraToNv12Converter {
     video_device: ID3D11VideoDevice,
@@ -143,14 +143,22 @@ impl BgraToNv12Converter {
 
 impl Converter for BgraToNv12Converter {
     type Env<'e> = EnvD3D11;
-    type Input<'i> = AcquiredFrame<'i>;
-    type Output<'o> = ID3D11Texture2D;
+    type Input<'i> = Option<AcquiredFrame<'i>>;
+    type Output<'o> = Option<ID3D11Texture2D>;
 
     fn convert(
         &mut self,
         input: Self::Input<'_>,
         env: &Self::Env<'_>
     ) -> Result<Self::Output<'_>> {
+        if input.is_none() {
+            return Ok(None)
+        }
+
+        let Some(input) = input else {
+            return Ok(None);
+        };
+
         let texture_bgra = input.texture().ok_or_else(|| anyhow!("No Texture provided"))?;
 
         let mut input_desc = D3D11_TEXTURE2D_DESC::default();
@@ -248,6 +256,6 @@ impl Converter for BgraToNv12Converter {
 
         blit_result.context("BGRA-to-NV12 conversion failed")?;
 
-        Ok(tex_nv12)
+        Ok(Some(tex_nv12))
     }
 }

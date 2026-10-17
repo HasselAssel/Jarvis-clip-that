@@ -1,177 +1,100 @@
-use std::path::Path;
-use std::thread;
-use std::time::Duration;
+use anyhow::Context;
 
-use anyhow::{anyhow, Result};
-use anyhow::{bail, Context};
-use ffmpeg_next::{
-    codec::Parameters,
-    format,
-    Packet,
-    Rational,
-};
-
+use crate::config::AppConfig;
+use crate::key_listener::KeyListener;
+use crate::recorders::factory::{Factory, FactoryCommands, FactoryResponse};
 use crate::recorders::traits::{Converter, Encoder, Source};
-use crate::recorders::windows::d3d11::converters::BgraToNv12Converter;
-use crate::recorders::windows::d3d11::encoders::EncoderD3D11;
-use crate::recorders::windows::d3d11::env::EnvD3D11;
-use crate::recorders::windows::d3d11::sources::SourceD3d11;
+use crate::save::{Saver, SaveStream};
 
 mod recorders;
 #[path = "../macros.rs"]
 mod macros;
+mod save;
+mod key_listener;
+mod config;
 
-fn main() -> Result<()> {
-    let codec = ffmpeg_next::encoder::find_by_name("hevc_amf").ok_or_else(|| anyhow!("no codec!"))?;
-    let ctx = ffmpeg_next::codec::context::Context::new_with_codec(codec);
-    let enc = ctx.encoder().video()?;
+fn main() {
+    let config_path = "config/config.toml";
+    let app_config = AppConfig::load(config_path).expect(&format!("Invalid config, check {:?}", config_path));
 
+    let (cmd_send, cmd_recv) = crossbeam_channel::unbounded();
+    let (resp_send, resp_recv) = crossbeam_channel::unbounded();
 
-    let fps = 10;
+    let factory = Factory::new(app_config.retention_secs, cmd_recv, resp_send);
+    factory.start();
 
-    let env = EnvD3D11::new()?;
-    let mut source = SourceD3d11::new(
-        0,
-        &env
-    )?;
-    let mut converter = BgraToNv12Converter::new(
-        (2560, 1440),
-        (2560, 1440),
-        &env
-    )?;
-    let mut encoder = EncoderD3D11::new(
-        (2560, 1440),
-        fps,
-        enc,
-        codec,
-        &env
-    )?;
-
-    let params = encoder.get_params();
-
-    let mut total_packets = Vec::with_capacity(150);
-
-    for i in 1..100 {
-        if let Ok(acquired_frame) = source.next_frame(&env) {
-            if let Ok(texture) = converter.convert(acquired_frame, &env){
-                let mut packets = encoder.encode(texture, &env)?;
-                for packet in &mut packets {
-                    packet.set_pts(Some(i));
-                }
-                total_packets.extend(packets);
-            } else {println!("texture");}
-        } else {println!("acquired_frame");}
-        thread::sleep(Duration::from_millis(100));
+    for recorder_config in app_config.recorders {
+        cmd_send.send(FactoryCommands::AddRecorder(recorder_config)).unwrap();
     }
 
-    save_packets_to_mp4(
-        "out/TEST2.mp4",
-        total_packets,
-        params,
-        Rational::new(1, fps),
-        fps as u32,
-    )?;
+    let mut key_listener = KeyListener::new();
 
+    let mut saver = Saver::new(app_config.output_dir).unwrap();
 
-    Ok(())
-}
+    let keys = app_config.keybinds.save_clip.iter().map(|keys| keys.iter().cloned().collect()).collect();
 
+    key_listener.register_shortcut(keys, move || {
+        cmd_send.send(FactoryCommands::Save).unwrap();
+        if let FactoryResponse::Save(streams) = resp_recv.recv().unwrap() {
+            dbg!(streams.len());
+            let save_streams = streams.into_iter().map(SaveStream::from).collect::<Vec<_>>();
+            dbg!(save_streams.len());
 
-/// Saves one encoded video stream to an MP4 file.
-///
-/// Requirements:
-/// - `packets` must already contain encoded video packets, such as H.264 or HEVC.
-/// - Packets must be in decoding/DTS order.
-/// - Packet timestamps must use `packet_time_base`.
-/// - `parameters` must come from the encoder that produced the packets.
-pub fn save_packets_to_mp4<P: AsRef<Path>>(
-    file_name: P,
-    mut packets: Vec<Packet>,
-    parameters: Parameters,
-    packet_time_base: Rational,
-    fps: u32,
-) -> Result<()> {
-    if packets.is_empty() {
-        bail!("cannot save MP4: packet vector is empty");
-    }
+            save_streams.iter().for_each(|ss| { dbg!(ss.packets.len()); });
+            save_streams.iter().for_each(|ss| { dbg!(ss.time_base); });
 
-    if fps == 0 {
-        bail!("cannot save MP4: fps must be greater than zero");
-    }
-
-    let file_name = file_name
-        .as_ref()
-        .to_str()
-        .context("output filename is not valid UTF-8")?;
-
-    // Ensure FFmpeg has been initialized. Repeated initialization is fine.
-    ffmpeg_next::init().context("failed to initialize FFmpeg")?;
-
-    let mut output =
-        format::output_as(file_name, "mp4").context("failed to create MP4 output context")?;
-
-    // Create the single video stream.
-    {
-        let mut stream = output
-            .add_stream(parameters.id())
-            .context("failed to add video stream")?;
-
-        stream.set_parameters(parameters);
-        stream.set_time_base(packet_time_base);
-        stream.set_rate(Rational::new(fps as i32, 1));
-
-        // Avoid carrying an incompatible codec tag into the MP4 container.
-        unsafe {
-            (*stream.parameters().as_mut_ptr()).codec_tag = 0;
+            let path = saver.save(save_streams).unwrap();
+            dbg!(path);
         }
-    }
+    });
 
-    /*
-     * Shift the whole timeline using one common offset.
-     *
-     * Using the same offset for PTS and DTS preserves the PTS-DTS difference,
-     * which matters when the encoder uses B-frames.
-     */
-    let earliest_timestamp = packets
-        .iter()
-        .flat_map(|packet| [packet.pts(), packet.dts()])
-        .flatten()
-        .min();
+    key_listener.start();
 
-    if let Some(offset) = earliest_timestamp {
-        for packet in &mut packets {
-            packet.set_pts(packet.pts().map(|pts| pts - offset));
-            packet.set_dts(packet.dts().map(|dts| dts - offset));
+
+    /*let retention_secs = 30;
+    let (cmd_send, cmd_recv) = crossbeam_channel::unbounded();
+    let (resp_send, resp_recv) = crossbeam_channel::unbounded();
+    
+    let factory = Factory::new(retention_secs, cmd_recv, resp_send);
+    factory.start();
+    
+    let video_config = Config {
+        frame_config: Video(VideoConfig {
+            fps: 30,
+            width: 2560,
+            height: 1440,
+            environment: D3D11 {monitor: 0},
+            codec: VideoCodec::HevcAmf,
+        }),
+    };
+
+    let audio_config = Config {
+        frame_config: Audio(AudioConfig {
+            environment: WasAPI(WasApiDefaultSys),
+            codec: AudioCodec::AAC,
+        }),
+    };
+
+    cmd_send.send(FactoryCommands::AddRecorder(video_config)).unwrap();
+    cmd_send.send(FactoryCommands::AddRecorder(audio_config)).unwrap();
+
+    let mut saver = Saver::new("out").unwrap();
+
+    let mut key_listener = KeyListener::new();
+    key_listener.register_shortcut(&[Key::Alt, Key::KeyM], move || {
+        cmd_send.send(FactoryCommands::Save).unwrap();
+        if let FactoryResponse::Save(streams) = resp_recv.recv().unwrap() {
+            dbg!(streams.len());
+            let save_streams = streams.iter().map(SaveStream::from).collect::<Vec<_>>();
+            dbg!(save_streams.len());
+
+            save_streams.iter().for_each(|ss| { dbg!(ss.packets.len()); });
+            save_streams.iter().for_each(|ss| { dbg!(ss.time_base); });
+
+            let path = saver.save(&save_streams).unwrap();
+            dbg!(path);
         }
-    }
+    });
 
-    output
-        .write_header()
-        .context("failed to write MP4 header")?;
-
-    // The MP4 muxer may change the stream time base while writing the header.
-    let output_time_base = output
-        .stream(0)
-        .context("output video stream disappeared")?
-        .time_base();
-
-    for mut packet in packets {
-        if packet.pts().is_none() && packet.dts().is_none() {
-            bail!("encoded packet has neither PTS nor DTS");
-        }
-
-        packet.set_stream(0);
-        packet.set_position(-1);
-        packet.rescale_ts(packet_time_base, output_time_base);
-
-        packet
-            .write_interleaved(&mut output)
-            .context("failed to write encoded video packet")?;
-    }
-
-    output
-        .write_trailer()
-        .context("failed to finalize MP4 file")?;
-
-    Ok(())
+    key_listener.start();*/
 }

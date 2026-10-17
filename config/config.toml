@@ -1,0 +1,38 @@
+
+retention_secs = 30
+output_dir = "out"
+
+[keybinds]
+save_clip = [
+    ["Alt", "KeyM"]
+]
+
+[[recorders]]
+
+[recorders.frame_config]
+type = "video"
+
+[recorders.frame_config.config]
+fps = 30
+width = 2560
+height = 1440
+codec = "hevc_amf"
+
+[recorders.frame_config.config.environment]
+type = "d3_d11"
+monitor = 0
+
+
+[[recorders]]
+
+[recorders.frame_config]
+type = "audio"
+
+[recorders.frame_config.config]
+codec = "aac"
+
+[recorders.frame_config.config.environment]
+type = "was_api"
+
+[recorders.frame_config.config.environment.config]
+type = "was_api_default_sys"

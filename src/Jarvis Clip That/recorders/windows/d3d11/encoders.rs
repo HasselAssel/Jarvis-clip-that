@@ -1,11 +1,11 @@
 use std::ptr::null_mut;
 
 use anyhow::{bail, Context, Result};
+use ffmpeg_next::{Frame, Packet};
 use ffmpeg_next::codec::{codec, Parameters};
 use ffmpeg_next::codec::encoder;
 use ffmpeg_next::codec::Flags;
-use ffmpeg_next::ffi::{av_buffer_create, av_buffer_ref, av_buffer_unref, av_frame_alloc, av_hwdevice_ctx_alloc, av_hwdevice_ctx_init, av_hwframe_ctx_alloc, av_hwframe_ctx_init, av_hwframe_get_buffer, AVBufferRef, AVFrame, AVHWDeviceContext, AVHWDeviceType, AVHWFramesContext};
-use ffmpeg_next::Packet;
+use ffmpeg_next::ffi::{av_buffer_create, av_buffer_ref, av_buffer_unref, av_hwdevice_ctx_alloc, av_hwdevice_ctx_init, av_hwframe_ctx_alloc, av_hwframe_ctx_init, av_hwframe_get_buffer, AVBufferRef, AVFrame, AVHWDeviceContext, AVHWDeviceType, AVHWFramesContext};
 use ffmpeg_next::sys::AVPixelFormat;
 use ffmpeg_next::util::frame::video;
 use windows::Win32::Graphics::Direct3D11::{ID3D11Device, ID3D11Texture2D};
@@ -16,8 +16,12 @@ use crate::recorders::windows::d3d11::env::EnvD3D11;
 
 pub struct EncoderD3D11 {
     encoder: encoder::video::Encoder,
-    av_frame: *mut AVFrame,
+    //av_frame: *mut AVFrame,
     frame: video::Video,
+
+    pts_counter: i64,
+
+    last_texture: Option<ID3D11Texture2D>,
 }
 
 impl EncoderD3D11 {
@@ -40,12 +44,16 @@ impl EncoderD3D11 {
             fps
         )?;
         let av_frame = create_av_frame(AVPixelFormat::AV_PIX_FMT_D3D11, i_width, i_height, hw_frame_ctx)?;
-        let frame = unsafe { video::Video::wrap(av_frame) };
+        //let frame = unsafe { video::Video::wrap(av_frame) };
+        let frame = unsafe { video::Video::from(av_frame) };
 
         Ok(Self {
             encoder,
-            av_frame,
             frame,
+
+            pts_counter: 0,
+
+            last_texture: None,
         })
     }
 
@@ -56,27 +64,36 @@ impl EncoderD3D11 {
 
 impl Encoder for EncoderD3D11 {
     type Env<'e> = EnvD3D11;
-    type Input<'i> = ID3D11Texture2D;
-    type Output<'o> = Vec<Packet>;
+    type Input<'i> = Option<ID3D11Texture2D>;
+    type Output = Vec<Packet>;
 
     fn encode(
         &mut self,
         input: Self::Input<'_>,
         _: &Self::Env<'_>
-    ) -> Result<Self::Output<'_>> {
-        insert_texture_into_frame(self.av_frame, &input)?;
-
-        self.encoder.send_frame(&self.frame)?;
-
-        let mut packet_vec = Vec::with_capacity(2);
-        let mut packet = Packet::empty();
-        while self.encoder.receive_packet(&mut packet).is_ok() {
-            let packet_clone = packet.clone();
-            //packet_clone.set_duration(duration);
-            packet_vec.push(packet_clone);
+    ) -> Result<Self::Output> {
+        if let Some(texture) = input {
+            self.last_texture = Some(texture.clone());
+            unsafe {
+                insert_texture_into_frame(self.frame.as_mut_ptr(), &texture)?;
+            }
         }
 
-        Ok(packet_vec)
+        self.frame.set_pts(Some(self.pts_counter));
+        self.encoder.send_frame(&self.frame)?;
+
+        self.pts_counter += 1;
+
+        let mut packets = Vec::with_capacity(2);
+        let mut packet = Packet::empty();
+        while self.encoder.receive_packet(&mut packet).is_ok() {
+            packets.push(std::mem::replace(
+                &mut packet,
+                Packet::empty(),
+            ));
+        }
+
+        Ok(packets)
     }
 }
 
@@ -85,10 +102,15 @@ pub fn create_av_frame(
     width: i32,
     height: i32,
     hw_frame_ctx: *mut AVBufferRef,
-) -> Result<*mut AVFrame> {
+//) -> Result<*mut AVFrame> {
+) -> Result<Frame> {
+    let mut frame;
     let av_frame;
     unsafe {
-        av_frame = av_frame_alloc();
+        //av_frame = av_frame_alloc();
+        frame = Frame::empty();
+        av_frame = frame.as_mut_ptr();
+
         if av_frame.is_null() {
             bail!("av_frame is null (1)");
         }
@@ -105,7 +127,7 @@ pub fn create_av_frame(
     if ret < 0 || av_frame.is_null() {
         bail!("av_frame is null (2)");
     }
-    Ok(av_frame)
+    Ok(frame)
 }
 
 fn insert_texture_into_frame(

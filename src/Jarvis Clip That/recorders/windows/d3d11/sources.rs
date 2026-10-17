@@ -50,7 +50,7 @@ impl SourceD3d11 {
 
 impl Source for SourceD3d11 {
     type Env<'e> = EnvD3D11;
-    type Output<'o> = AcquiredFrame<'o>;
+    type Output<'o> = Option<AcquiredFrame<'o>>;
 
     fn next_frame(
         &mut self,
@@ -60,12 +60,16 @@ impl Source for SourceD3d11 {
 
         self.resource = None;
 
-        unsafe {
+        let res = unsafe {
             self.duplication.AcquireNextFrame(
                 0,
                 &mut self.frame_info,
                 &mut self.resource,
-            )?;
+            )
+        };
+
+        if res.is_err() {
+            return Ok(None)
         }
 
         let mut acquired_frame = AcquiredFrame {
@@ -79,7 +83,7 @@ impl Source for SourceD3d11 {
             acquired_frame.texture = Some(dxgi_resource.cast()?);
         }
 
-        Ok(acquired_frame)
+        Ok(Some(acquired_frame))
     }
 }
 

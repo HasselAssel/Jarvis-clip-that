@@ -17,6 +17,7 @@ use ffmpeg_next::frame::Audio;
 use windows::core::HRESULT;
 use windows::core::Interface;
 use windows::core::IUnknown;
+use windows::Win32::Foundation::HANDLE;
 use windows::Win32::Media::Audio as WinAudio;
 use windows::Win32::Media::Audio::AUDCLNT_SHAREMODE_SHARED;
 use windows::Win32::Media::Audio::AUDCLNT_STREAMFLAGS_EVENTCALLBACK;
@@ -61,10 +62,16 @@ use windows_core::BOOL;
 use windows_core::GUID;
 use windows_core::PCWSTR;
 
+use crate::recorders::traits::Event;
+use crate::recorders::windows::wasapi::sources::SourceWasapi;
+
 pub struct EnvWasapi {
-    client: IAudioClient,
-    pub(crate) format: WAVEFORMATEXTENSIBLE,
+    pub client: IAudioClient,
+    pub format: WAVEFORMATEXTENSIBLE,
+    event: HANDLE,
 }
+
+unsafe impl Send for EnvWasapi {} // TODO: Yea I am 67% sure this isn't safe. Change architecture to create Env on destination thread!
 
 impl EnvWasapi {
     pub fn new(
@@ -72,6 +79,8 @@ impl EnvWasapi {
         render_else_capture: bool,
         include_process_tree: bool,
     ) -> Result<Self> {
+        let _ = ensure_co_initialize();
+        
         let (client, format) = match process_id {
             Some(process_id) => {
                 create_process_iaudioclient(
@@ -87,10 +96,39 @@ impl EnvWasapi {
             }
         };
 
+        let event;
+        unsafe {
+            event = CreateEventW(None, false, false, None)?;
+            client.SetEventHandle(event)?;
+        }
+
         Ok(Self {
             client,
             format,
+            event,
         })
+    }
+}
+
+impl Event for EnvWasapi {
+    fn start(&mut self) {
+        unsafe { self.client.Start().unwrap(); }
+        self.await_event();
+    }
+    fn await_event(&mut self) {
+        unsafe {
+            let _ = WaitForSingleObject(self.event, INFINITE);
+        }
+        // TODO: handle return codes!!!
+    }
+}
+
+fn ensure_co_initialize() -> HRESULT {
+    unsafe {
+        windows::Win32::System::Com::CoInitializeEx(
+            None,
+            windows::Win32::System::Com::COINIT_MULTITHREADED,
+        )
     }
 }
 
