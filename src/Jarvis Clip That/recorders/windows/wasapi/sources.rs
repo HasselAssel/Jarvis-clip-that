@@ -56,7 +56,7 @@ impl Source for SourceWasapi {
             )?;
         }
 
-        debug!(flags);
+        //debug!(flags);
 
         if packet_length == 0 {
             return Err(anyhow!("packet length is 0"));

@@ -161,7 +161,9 @@ impl Converter for BgraToNv12Converter {
 
         let frame_qpc = input.frame_info.LastPresentTime;
 
-        let texture_bgra = input.texture().ok_or_else(|| anyhow!("No Texture provided"))?;
+        let Some(texture_bgra) = input.texture() else {
+            return Ok(None)
+        };
 
         let mut input_desc = D3D11_TEXTURE2D_DESC::default();
 

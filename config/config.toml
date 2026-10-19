@@ -1,5 +1,5 @@
 
-retention_secs = 30
+retention_secs = 120
 output_dir = "out"
 
 [keybinds]
