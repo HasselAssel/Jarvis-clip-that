@@ -18,7 +18,7 @@ impl PollingDriver {
 }
 
 impl<T> Driver<T> for PollingDriver {
-    fn start(&mut self, _source: &mut T) {
+    fn start(&mut self, source: &mut T) {
         self.next = Instant::now();
     }
 

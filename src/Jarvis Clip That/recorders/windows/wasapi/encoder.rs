@@ -1,7 +1,8 @@
 use anyhow::{anyhow, Result};
-use ffmpeg_next::{ChannelLayout, Packet};
+use ffmpeg_next::{ChannelLayout, Packet, Rational};
 use ffmpeg_next::codec::{codec, Flags, Parameters};
 use ffmpeg_next::codec::encoder;
+use ffmpeg_next::ffi::av_rescale_q;
 use ffmpeg_next::format::Sample;
 use ffmpeg_next::util::format::sample;
 use ffmpeg_next::util::frame::audio;
@@ -9,6 +10,7 @@ use windows::Win32::Media::Audio::WAVEFORMATEXTENSIBLE;
 use windows::Win32::Media::KernelStreaming::KSDATAFORMAT_SUBTYPE_PCM;
 use windows::Win32::Media::Multimedia::KSDATAFORMAT_SUBTYPE_IEEE_FLOAT;
 
+use crate::debug;
 use crate::recorders::traits::Encoder;
 use crate::recorders::windows::wasapi::env::EnvWasapi;
 use crate::recorders::windows::wasapi::sources::WasApiAudioData;
@@ -25,7 +27,10 @@ pub struct EncoderWasapi {
     frame_queue_buffer: Box<[u8]>,
     frame_queue_buffer_pos: usize,
 
-    expected_device_pos: Option<u64>,
+    start_qpc_pos: i128,
+    first_qpc_pos: Option<u64>,
+    total_samples: u64,
+    pts_offset: Option<i64>,
 }
 
 impl EncoderWasapi {
@@ -34,6 +39,7 @@ impl EncoderWasapi {
         codec: codec::Codec,
         frame_size: usize,
         output_sample: Sample,
+        start_time: i128,
         env: &<Self as Encoder>::Env<'_>,
     ) -> Result<Self> {
         let channel_layout = match env.format.Format.nChannels {
@@ -74,7 +80,10 @@ impl EncoderWasapi {
             frame_queue_buffer: vec![0; frame_bytes].into_boxed_slice(),
             frame_queue_buffer_pos: 0,
 
-            expected_device_pos: None,
+            start_qpc_pos: start_time,
+            first_qpc_pos: None,
+            total_samples: 0,
+            pts_offset: None,
         })
     }
 
@@ -102,18 +111,55 @@ impl Encoder for EncoderWasapi {
     type Output = Vec<Packet>;
 
     fn encode(&mut self, input: Self::Input<'_>, env: &Self::Env<'_>) -> Result<Self::Output> {
+        let first_qpc = *self.first_qpc_pos.get_or_insert(input.qpc_pos);
+
+        let pts_offset = *self.pts_offset.get_or_insert_with(|| unsafe {
+            debug!(
+                av_rescale_q(
+                    (first_qpc as i128 - self.start_qpc_pos) as i64,
+                    Rational(1, 10_000_000).into(),
+                    self.encoder.time_base().into(),
+                )
+            )
+        });
+
+        let elapsed = unsafe {
+            av_rescale_q(
+                self.total_samples as i64,
+                self.encoder.time_base().into(),
+                Rational(1, 10_000_000).into(),
+            )
+        };
+
+        let expected_qpc = first_qpc + elapsed as u64;
+
+        let delta = input.qpc_pos as i128 - expected_qpc as i128;
+
+        let missing_samples = unsafe {
+            av_rescale_q(
+                delta as i64,
+                Rational(1, 10_000_000).into(), // GetBuffer always returns qpc in (1, 10_000_000) time_base :)
+                self.encoder.time_base().into(),
+            )
+        };
+        let missing_samples = missing_samples.max(0) as usize;
+
+        debug!(
+            delta as f64 / 10_000.0,
+            input.packet_length,
+            missing_samples,
+            self.total_samples,
+            self.frame_queue_buffer_pos
+        );
+
         let mut packets = Vec::new();
         let mut packet = Packet::empty();
 
-        let expected = *self.expected_device_pos.get_or_insert(input.device_pos);
-        let missing_samples = input.device_pos.saturating_sub(expected);
         let block_align = env.format.Format.nBlockAlign as usize;
+        let mut missing_bytes = missing_samples * block_align;
 
-        // silence
-
-        let mut missing_bytes = missing_samples as usize * block_align;
-
-        if missing_bytes > 0 {
+        /*if missing_bytes > 0 {
+            debug!(missing_bytes);
             // remaining space in the current frame
             if self.frame_queue_buffer_pos > 0 {
                 let available = self.frame_bytes - self.frame_queue_buffer_pos;
@@ -163,7 +209,7 @@ impl Encoder for EncoderWasapi {
                 self.frame_queue_buffer[..missing_bytes].fill(0);
                 self.frame_queue_buffer_pos = missing_bytes;
             }
-        }
+        }*/
 
         // audio
 
@@ -199,7 +245,12 @@ impl Encoder for EncoderWasapi {
             }
         }
 
-        self.expected_device_pos = Some(input.device_pos + input.packet_length as u64);
+        self.total_samples += /*missing_samples as u64 +*/ input.packet_length as u64;
+
+        for packet in &mut packets {
+            packet.set_pts(packet.pts().map(|pts| pts + pts_offset));
+            packet.set_dts(packet.dts().map(|dts| dts + pts_offset));
+        }
 
         Ok(packets)
     }

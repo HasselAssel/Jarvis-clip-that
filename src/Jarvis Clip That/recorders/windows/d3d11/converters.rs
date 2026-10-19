@@ -144,7 +144,7 @@ impl BgraToNv12Converter {
 impl Converter for BgraToNv12Converter {
     type Env<'e> = EnvD3D11;
     type Input<'i> = Option<AcquiredFrame<'i>>;
-    type Output<'o> = Option<ID3D11Texture2D>;
+    type Output<'o> = Option<(ID3D11Texture2D, i64)>;
 
     fn convert(
         &mut self,
@@ -158,6 +158,8 @@ impl Converter for BgraToNv12Converter {
         let Some(input) = input else {
             return Ok(None);
         };
+
+        let frame_qpc = input.frame_info.LastPresentTime;
 
         let texture_bgra = input.texture().ok_or_else(|| anyhow!("No Texture provided"))?;
 
@@ -256,6 +258,6 @@ impl Converter for BgraToNv12Converter {
 
         blit_result.context("BGRA-to-NV12 conversion failed")?;
 
-        Ok(Some(tex_nv12))
+        Ok(Some((tex_nv12, frame_qpc)))
     }
 }

@@ -2,6 +2,7 @@ use anyhow::{anyhow, Result};
 use windows::Win32::Media::Audio::{IAudioCaptureClient, IAudioClient};
 use windows::Win32::System::Performance::{QueryPerformanceCounter, QueryPerformanceFrequency};
 
+use crate::debug;
 use crate::recorders::traits::Source;
 use crate::recorders::windows::wasapi::env::EnvWasapi;
 
@@ -55,6 +56,8 @@ impl Source for SourceWasapi {
             )?;
         }
 
+        debug!(flags);
+
         if packet_length == 0 {
             return Err(anyhow!("packet length is 0"));
         }
@@ -66,10 +69,10 @@ impl Source for SourceWasapi {
             )
         };
 
-        //Ok((buffer, device_pos, packet_length))
         Ok(WasApiAudioData {
             data: buffer,
             device_pos,
+            qpc_pos,
             packet_length,
             _capture_client: &self.capture_client,
         })
@@ -79,6 +82,7 @@ impl Source for SourceWasapi {
 pub struct WasApiAudioData<'a> {
     pub data: &'a [u8],
     pub device_pos: u64,
+    pub qpc_pos: u64,
     pub packet_length: u32,
 
     _capture_client: &'a IAudioCaptureClient,

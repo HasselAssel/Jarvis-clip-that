@@ -73,8 +73,9 @@ impl Source for SourceD3d11 {
         }
 
         let mut acquired_frame = AcquiredFrame {
-            duplication: &self.duplication,
+            _duplication: &self.duplication,
             texture: None,
+            frame_info: &self.frame_info
         };
 
         let dxgi_resource = self.resource.as_ref().ok_or_else(|| anyhow!("no dxgi_resource!"))?;
@@ -89,8 +90,9 @@ impl Source for SourceD3d11 {
 
 
 pub struct AcquiredFrame<'a> {
-    duplication: &'a IDXGIOutputDuplication,
     texture: Option<ID3D11Texture2D>,
+    pub frame_info: &'a DXGI_OUTDUPL_FRAME_INFO,
+    _duplication: &'a IDXGIOutputDuplication,
 }
 
 impl AcquiredFrame<'_> {
@@ -102,7 +104,7 @@ impl AcquiredFrame<'_> {
 impl Drop for AcquiredFrame<'_> {
     fn drop(&mut self) {
         let _ = unsafe {
-            self.duplication.ReleaseFrame()
+            self._duplication.ReleaseFrame()
         };
     }
 }

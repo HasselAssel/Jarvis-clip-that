@@ -6,24 +6,15 @@ use ffmpeg::{codec, format, Packet, Rational};
 use ffmpeg_next as ffmpeg;
 use ffmpeg_next::ffi::{av_compare_ts, av_rescale_q};
 
+use crate::recorders::factory::CommandSave;
+
 /// One track to include in this particular clip. Packets must be in
 /// encoder output order, with PTS/DTS expressed in `time_base`.
 pub struct SaveStream {
+    pub packets: Vec<Packet>,
     pub parameters: codec::Parameters,
     pub time_base: Rational,
     pub start_time: i64, // in time_base
-    pub packets: Vec<Packet>,
-}
-
-impl From<(Vec<Packet>, codec::Parameters, Rational, i64)> for SaveStream {
-    fn from(value: (Vec<Packet>, codec::Parameters, Rational, i64)) -> Self {
-        Self {
-            parameters: value.1,
-            time_base: value.2,
-            start_time: value.3,
-            packets: value.0,
-        }
-    }
 }
 
 pub struct Saver {
@@ -38,13 +29,13 @@ impl Saver {
         Ok(Self { directory, next_id: 1 })
     }
 
-    pub fn save(&mut self, streams: Vec<SaveStream>) -> Result<PathBuf> {
-        if streams.is_empty() {
+    pub fn save(&mut self, save: CommandSave) -> Result<PathBuf> {
+        if save.streams.is_empty() {
             bail!("no streams provided");
         }
 
         let path = self.reserve_path()?;
-        let result = self.write_clip(&path, streams);
+        let result = self.write_clip(&path, save);
         if result.is_err() {
             let _ = fs::remove_file(&path);
         }
@@ -66,7 +57,43 @@ impl Saver {
         }
     }
 
-    fn write_clip(&self, path: &Path, streams: Vec<SaveStream>) -> Result<()> { // Todo: audio still not synced!!! idk why check out folder
+    fn write_clip(&self, path: &Path, save: CommandSave) -> Result<()> { // Todo: audio still not synced!!! idk why check out folder !!! use time to cut unwanted packets that were still floating in the buffer.
+        let mut streams = save.streams;
+
+        for stream in &mut streams {
+            let now = unsafe {
+                av_rescale_q(
+                    save.time_stamp,
+                    Rational::from((save.time_base.0 as i32, save.time_base.1 as i32)).into(),
+                    stream.time_base.into(),
+                )
+            };
+
+            let retention = unsafe {
+                av_rescale_q(
+                    save.retention_secs,
+                    Rational(1, 1).into(),
+                    stream.time_base.into(),
+                )
+            };
+
+            let max_pts = now
+                .checked_sub(stream.start_time)
+                .ok_or_else(|| anyhow!("Timestamp overflow"))?;
+
+            let min_pts = max_pts
+                .checked_sub(retention)
+                .ok_or_else(|| anyhow!("Timestamp overflow"))?;
+
+
+            // TODO: possibly removes keyframes
+            stream.packets.retain(|packet| {
+                packet.pts().is_some_and(|pts| {
+                    pts >= min_pts && pts <= max_pts
+                })
+            });
+        }
+
         let mut start: Option<(i64, Rational)> = None;
 
         for stream in &streams {
@@ -74,19 +101,19 @@ impl Saver {
                 continue;
             };
 
-            let global_pts = stream.start_time
+            let stream_global_pts = stream.start_time
                 .checked_add(min_pts)
                 .ok_or_else(|| anyhow!("Timestamp overflow"))?;
 
             if start.is_none_or(|(start_ts, start_tb)| unsafe {
                 av_compare_ts(
-                    global_pts,
+                    stream_global_pts,
                     stream.time_base.into(),
                     start_ts,
                     start_tb.into(),
                 ) < 0
             }) {
-                start = Some((global_pts, stream.time_base));
+                start = Some((stream_global_pts, stream.time_base));
             }
         }
 

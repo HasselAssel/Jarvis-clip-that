@@ -5,6 +5,7 @@ use anyhow::Result;
 use crossbeam_channel::{Receiver, Sender};
 use ffmpeg_next::{codec, Packet, Rational};
 
+use crate::debug;
 use crate::recorders::traits::{Converter, Driver, Encoder, RingBuffer, Source};
 
 pub struct RecorderPipeline<Env, D, S, C, E> {
@@ -48,7 +49,7 @@ where
 
     pub fn start(
         mut self,
-        channel_send: Sender<E::Output>
+        channel_send: Sender<E::Output>,
     ) -> JoinHandle<()>
     where
         D: Send + 'static,
@@ -60,7 +61,6 @@ where
     {
         thread::spawn(move || {
             self.driver.start(&mut self.env);
-
             loop {
                 let res = self.next();
                 if let Ok(next) = res {
@@ -68,7 +68,7 @@ where
                         return
                     }
                 } else {
-                    dbg!(res.err());
+                    debug!(res.err());
                 }
 
                 self.driver.wait(&mut self.env);
@@ -77,11 +77,14 @@ where
     }
 }
 
+
+
 pub struct RecorderStream<T> {
     pub receiver: Receiver<T>,
 
     packets_ring_buffer: Box<dyn RingBuffer<Packet> + Send>,
 
+    pub start_time: i64, // in recorder time_base
     pub parameters: codec::Parameters,
     pub time_base: Rational,
 }
@@ -91,18 +94,19 @@ impl<T> RecorderStream<T> {
         receiver: Receiver<T>,
         retention_secs: i64,
         parameters: codec::Parameters,
-        time_base: Rational
+        time_base: Rational,
+        start_time: i64,
     ) -> Self {
         Self {
             receiver,
             packets_ring_buffer: Box::new(<R as RingBuffer<Packet>>::new(retention_secs * time_base.1 as i64 / time_base.0 as i64)),
+            start_time,
             parameters,
             time_base,
         }
     }
 
     pub fn insert(&mut self, packets: Vec<Packet>) {
-        //dbg!(packets.len(), self.time_base);
         packets.into_iter().for_each(|packet| self.packets_ring_buffer.insert(packet));
     }
 

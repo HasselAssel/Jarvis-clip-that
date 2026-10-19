@@ -1,27 +1,31 @@
 use std::ptr::null_mut;
 
-use anyhow::{bail, Context, Result};
-use ffmpeg_next::{Frame, Packet};
+use anyhow::{anyhow, bail, Context, Result};
+use ffmpeg_next::{encoder, Frame, Packet};
 use ffmpeg_next::codec::{codec, Parameters};
-use ffmpeg_next::codec::encoder;
 use ffmpeg_next::codec::Flags;
-use ffmpeg_next::ffi::{av_buffer_create, av_buffer_ref, av_buffer_unref, av_hwdevice_ctx_alloc, av_hwdevice_ctx_init, av_hwframe_ctx_alloc, av_hwframe_ctx_init, av_hwframe_get_buffer, AVBufferRef, AVFrame, AVHWDeviceContext, AVHWDeviceType, AVHWFramesContext};
+use ffmpeg_next::ffi::{av_buffer_create, av_buffer_ref, av_buffer_unref, av_hwdevice_ctx_alloc, av_hwdevice_ctx_init, av_hwframe_ctx_alloc, av_hwframe_ctx_init, av_hwframe_get_buffer, av_rescale, AVBufferRef, AVFrame, AVHWDeviceContext, AVHWDeviceType, AVHWFramesContext};
 use ffmpeg_next::sys::AVPixelFormat;
 use ffmpeg_next::util::frame::video;
 use windows::Win32::Graphics::Direct3D11::{ID3D11Device, ID3D11Texture2D};
+use windows::Win32::System::Performance::QueryPerformanceFrequency;
 use windows_core::Interface;
+use crate::debug;
 
 use crate::recorders::traits::Encoder;
 use crate::recorders::windows::d3d11::env::EnvD3D11;
+use crate::timing::Moment;
 
 pub struct EncoderD3D11 {
     encoder: encoder::video::Encoder,
-    //av_frame: *mut AVFrame,
     frame: video::Video,
 
     pts_counter: i64,
 
     last_texture: Option<ID3D11Texture2D>,
+
+    start_time: Moment,
+    pts_offset: Option<i64>,
 }
 
 impl EncoderD3D11 {
@@ -30,6 +34,7 @@ impl EncoderD3D11 {
         fps: i32,
         enc: encoder::video::Video,
         codec: codec::Codec,
+        start_time: Moment,
         env: &<Self as Encoder>::Env<'_>,
     ) -> Result<Self> {
         let i_width = i32::try_from(width).with_context(|| format!("height exceeds i32::MAX: {width}"))?;
@@ -44,8 +49,9 @@ impl EncoderD3D11 {
             fps
         )?;
         let av_frame = create_av_frame(AVPixelFormat::AV_PIX_FMT_D3D11, i_width, i_height, hw_frame_ctx)?;
-        //let frame = unsafe { video::Video::wrap(av_frame) };
         let frame = unsafe { video::Video::from(av_frame) };
+
+
 
         Ok(Self {
             encoder,
@@ -54,6 +60,9 @@ impl EncoderD3D11 {
             pts_counter: 0,
 
             last_texture: None,
+
+            start_time,
+            pts_offset: None,
         })
     }
 
@@ -64,7 +73,7 @@ impl EncoderD3D11 {
 
 impl Encoder for EncoderD3D11 {
     type Env<'e> = EnvD3D11;
-    type Input<'i> = Option<ID3D11Texture2D>;
+    type Input<'i> = Option<(ID3D11Texture2D, i64)>;
     type Output = Vec<Packet>;
 
     fn encode(
@@ -72,12 +81,45 @@ impl Encoder for EncoderD3D11 {
         input: Self::Input<'_>,
         _: &Self::Env<'_>
     ) -> Result<Self::Output> {
-        if let Some(texture) = input {
+        let pts_offset = match self.pts_offset {
+            Some(offset) => offset,
+            None => {
+                let (_, frame_qpc) = input.as_ref()
+                    .ok_or_else(|| anyhow!("No init frame (and QPC)"))?;
+
+                let mut qpc_freq = 0;
+                unsafe {
+                    QueryPerformanceFrequency(&mut qpc_freq)?;
+
+                    let start_time_in_qpc = av_rescale(
+                        self.start_time.pos,
+                        qpc_freq * self.start_time.time_base.0,
+                        self.start_time.time_base.1
+                    );
+
+                    let tb = self.encoder.time_base();
+                    let offset = debug!(
+                        av_rescale(
+                            *frame_qpc - start_time_in_qpc,
+                            tb.1 as i64,
+                            qpc_freq * tb.0 as i64,
+                        )
+                    );
+
+                    self.pts_offset = Some(offset);
+                    offset
+                }
+            }
+        };
+
+        if let Some((texture, _)) = input {
             self.last_texture = Some(texture.clone());
             unsafe {
                 insert_texture_into_frame(self.frame.as_mut_ptr(), &texture)?;
             }
         }
+
+        // TODO: first frame...!
 
         self.frame.set_pts(Some(self.pts_counter));
         self.encoder.send_frame(&self.frame)?;
@@ -91,6 +133,11 @@ impl Encoder for EncoderD3D11 {
                 &mut packet,
                 Packet::empty(),
             ));
+        }
+
+        for packet in &mut packets {
+            packet.set_pts(packet.pts().map(|pts| pts + pts_offset));
+            packet.set_dts(packet.dts().map(|dts| dts + pts_offset));
         }
 
         Ok(packets)

@@ -5,8 +5,10 @@ use anyhow::{anyhow, Result};
 use crossbeam_channel::{Receiver, Select, Sender};
 use ffmpeg_next::{codec, Packet, Rational};
 use ffmpeg_next::encoder::find_by_name;
+use ffmpeg_next::ffi::av_rescale_q;
 use ffmpeg_next::format::Sample;
 use ffmpeg_next::format::sample::Type::Planar;
+use crate::debug;
 
 use crate::recorders::config::{AudioCodec, Config, FrameConfig, VideoCodec};
 use crate::recorders::driver::{EventDriver, PollingDriver};
@@ -22,8 +24,10 @@ use crate::recorders::windows::wasapi::converter::ConverterWasapi;
 use crate::recorders::windows::wasapi::encoder::EncoderWasapi;
 use crate::recorders::windows::wasapi::env::EnvWasapi;
 use crate::recorders::windows::wasapi::sources::SourceWasapi;
+use crate::save::SaveStream;
+use crate::timing::{Moment, now};
 
-fn create_start_recorder(config: Config, retention_secs: i64) -> Result<RecorderStream<Vec<Packet>>> {
+fn create_start_recorder(config: Config, retention_secs: i64, creation_moment: Moment) -> Result<RecorderStream<Vec<Packet>>> {
     let (sender, receiver) = crossbeam_channel::unbounded();
     match config.frame_config {
         FrameConfig::Video(video_config) => {
@@ -49,18 +53,28 @@ fn create_start_recorder(config: Config, retention_secs: i64) -> Result<Recorder
                         video_config.fps,
                         enc,
                         codec,
+                        creation_moment.clone(),
                         &env
                     )?;
                     let driver = PollingDriver::new(Duration::from_secs_f64(1f64 / video_config.fps as f64));
                     let params = encoder.get_params();
+                    let time_base = Rational(1, video_config.fps);
                     let recorder = RecorderPipeline::<
                         EnvD3D11,_,SourceD3d11,BgraToNv12Converter,EncoderD3D11,
                     >::new(env, driver, source, converter, encoder);
+                    let now_rescaled = unsafe {
+                        av_rescale_q(
+                            creation_moment.pos,
+                            Rational::from((creation_moment.time_base.0 as i32, creation_moment.time_base.1 as i32)).into(),
+                            time_base.into(),
+                        )
+                    };
                     let rs = RecorderStream::new::<RingBuffer<Packet>>(
                         receiver,
                         retention_secs,
                         params,
-                        Rational(1, video_config.fps)
+                        time_base,
+                        now_rescaled,
                     );
                     recorder.start(sender);
 
@@ -90,24 +104,40 @@ fn create_start_recorder(config: Config, retention_secs: i64) -> Result<Recorder
                     };
                     let ctx = codec::context::Context::new_with_codec(codec);
                     let enc = ctx.encoder().audio()?;
+                    let time_base = Rational(1, env.format.Format.nSamplesPerSec as i32);
+                    let now_rescaled_buffer_qpc = unsafe {
+                        av_rescale_q(
+                            creation_moment.pos,
+                            Rational::from((creation_moment.time_base.0 as i32, creation_moment.time_base.1 as i32)).into(),
+                            Rational(1, 10_000_000).into(), // GetBuffer always returns qpc in (1, 10_000_000) time_base :)
+                        )
+                    };
                     let encoder = EncoderWasapi::new(
                         enc,
                         codec,
                         frame_size,
                         sample,
+                        now_rescaled_buffer_qpc as i128,
                         &env,
                     )?;
                     let driver = EventDriver;
                     let params = encoder.get_params();
-                    let time_base = Rational(1, env.format.Format.nSamplesPerSec as i32);
                     let recorder = RecorderPipeline::<
                         EnvWasapi,_,SourceWasapi,ConverterWasapi,EncoderWasapi,
                     >::new(env, driver, source, converter, encoder);
+                    let now_rescaled = unsafe {
+                        av_rescale_q(
+                            creation_moment.pos,
+                            Rational::from((creation_moment.time_base.0 as i32, creation_moment.time_base.1 as i32)).into(),
+                            time_base.into(),
+                        )
+                    };
                     let rs = RecorderStream::new::<RingBuffer<Packet>>(
                         receiver,
                         retention_secs,
                         params,
-                        time_base
+                        time_base,
+                        now_rescaled,
                     );
                     recorder.start(sender);
 
@@ -124,7 +154,7 @@ pub enum FactoryCommands {
 }
 
 pub enum FactoryResponse {
-    Save(Vec<(Vec<Packet>, codec::Parameters, Rational, i64)>),
+    Save(CommandSave),
 }
 
 pub struct Factory {
@@ -197,24 +227,44 @@ impl Factory {
     fn handle_command(&mut self, command: FactoryCommands) {
         match command {
             FactoryCommands::Save => {
+                let moment = now().expect("no time :( for saving");
                 let mut save_streams = Vec::with_capacity(self.recorder_streams.len());
                 self.recorder_streams.iter().for_each(|stream|
-                    save_streams.push((stream.copy_out(), stream.parameters.clone(), stream.time_base, 0)) // TODO: replace 0 with the real start time in timebase
+                    save_streams.push(SaveStream {
+                        packets: stream.copy_out(),
+                        parameters: stream.parameters.clone(),
+                        time_base: stream.time_base,
+                        start_time: stream.start_time,
+                    })
                 );
-                let _ = self.response_sender.try_send(FactoryResponse::Save(save_streams)); // todo: proper handling
+                let cmd_save = CommandSave {
+                    streams: save_streams,
+                    time_stamp: moment.pos,
+                    time_base: moment.time_base,
+                    retention_secs: self.retention_secs,
+                };
+                let _ = self.response_sender.try_send(FactoryResponse::Save(cmd_save)); // todo: proper handling
             }
 
             FactoryCommands::AddRecorder(config) => {
                 let dbg_config = config.clone();
-                let res = create_start_recorder(config, self.retention_secs);
+                let moment = now().expect("no time :( for adding");
+                let res = create_start_recorder(config, self.retention_secs, moment);
                 if let Ok(recorder_stream) = res {
                     self.recorder_streams.push(recorder_stream);
                 } else {
-                    dbg!("create_start_recorder returned Err");
-                    dbg!(dbg_config);
-                    dbg!(res.err());
+                    debug!("create_start_recorder returned Err");
+                    debug!(dbg_config);
+                    debug!(res.err());
                 }
             }
         }
     }
+}
+
+pub struct CommandSave {
+    pub streams: Vec<SaveStream>,
+    pub time_stamp: i64,
+    pub time_base: (i64, i64),
+    pub retention_secs: i64,
 }
