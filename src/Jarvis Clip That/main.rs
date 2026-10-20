@@ -36,7 +36,7 @@ fn main() {
     let cmd_send_k = cmd_send.clone();
     key_listener.register_shortcut(keys, move || {
         cmd_send_k.send(FactoryCommands::Save).unwrap();
-        if let FactoryResponse::Save(save) = resp_recv.recv().unwrap() {
+        let FactoryResponse::Save(save) = resp_recv.recv().unwrap(); {
             let path = saver.save(save).unwrap();
             debug!(path);
         }
