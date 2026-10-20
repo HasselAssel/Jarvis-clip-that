@@ -8,6 +8,7 @@ use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
 use std::sync::Condvar;
 use std::sync::Mutex;
+use std::thread;
 use std::time::Duration;
 use std::time::Instant;
 
@@ -44,7 +45,8 @@ use windows::Win32::Media::Audio::PROCESS_LOOPBACK_MODE_INCLUDE_TARGET_PROCESS_T
 use windows::Win32::Media::Audio::WAVEFORMATEX;
 use windows::Win32::Media::Audio::WAVEFORMATEXTENSIBLE;
 use windows::Win32::Media::Audio::WAVEFORMATEXTENSIBLE_0;
-use windows::Win32::Media::KernelStreaming::WAVE_FORMAT_EXTENSIBLE;
+use windows::Win32::Media::KernelStreaming::{KSDATAFORMAT_SUBTYPE_PCM, WAVE_FORMAT_EXTENSIBLE};
+use windows::Win32::Media::Multimedia::KSDATAFORMAT_SUBTYPE_IEEE_FLOAT;
 use windows::Win32::System::Com::{CoCreateInstance, CoTaskMemFree};
 use windows::Win32::System::Com::BLOB;
 use windows::Win32::System::Com::CLSCTX_ALL;
@@ -62,6 +64,7 @@ use windows_core::BOOL;
 use windows_core::GUID;
 use windows_core::PCWSTR;
 
+use crate::debug;
 use crate::recorders::traits::Event;
 use crate::recorders::windows::wasapi::sources::SourceWasapi;
 
@@ -80,7 +83,8 @@ impl EnvWasapi {
         include_process_tree: bool,
     ) -> Result<Self> {
         let _ = ensure_co_initialize();
-        
+
+        debug!("bef");
         let (client, format) = match process_id {
             Some(process_id) => {
                 create_process_iaudioclient(
@@ -95,6 +99,7 @@ impl EnvWasapi {
                 )?
             }
         };
+        debug!("aft");
 
         let event;
         unsafe {
@@ -123,7 +128,7 @@ impl Event for EnvWasapi {
     }
 }
 
-fn ensure_co_initialize() -> HRESULT {
+pub fn ensure_co_initialize() -> HRESULT {
     unsafe {
         windows::Win32::System::Com::CoInitializeEx(
             None,
@@ -193,14 +198,13 @@ pub fn create_process_iaudioclient(
     process_id: u32,
     include_process_tree: bool,
 ) -> Result<(IAudioClient, WAVEFORMATEXTENSIBLE)> {
+    debug!(process_id);
+
     let mut activation_params = AUDIOCLIENT_ACTIVATION_PARAMS {
         ActivationType: AUDIOCLIENT_ACTIVATION_TYPE_PROCESS_LOOPBACK,
-
         Anonymous: AUDIOCLIENT_ACTIVATION_PARAMS_0 {
-            ProcessLoopbackParams:
-            AUDIOCLIENT_PROCESS_LOOPBACK_PARAMS {
+            ProcessLoopbackParams: AUDIOCLIENT_PROCESS_LOOPBACK_PARAMS {
                 TargetProcessId: process_id,
-
                 ProcessLoopbackMode: if include_process_tree {
                     PROCESS_LOOPBACK_MODE_INCLUDE_TARGET_PROCESS_TREE
                 } else {
@@ -210,32 +214,28 @@ pub fn create_process_iaudioclient(
         },
     };
 
-    let activation_propvariant = PROPVARIANT {
+    debug!(process_id);
+
+    let activation_propvariant = ManuallyDrop::new(PROPVARIANT {
         Anonymous: PROPVARIANT_0 {
-            Anonymous: ManuallyDrop::new(
-                PROPVARIANT_0_0 {
-                    vt: VT_BLOB,
-                    wReserved1: 0,
-                    wReserved2: 0,
-                    wReserved3: 0,
-
-                    Anonymous: PROPVARIANT_0_0_0 {
-                        blob: BLOB {
-                            cbSize: size_of::<
-                                AUDIOCLIENT_ACTIVATION_PARAMS,
-                            >() as u32,
-
-                            pBlobData: (
-                                &mut activation_params
-                                    as *mut AUDIOCLIENT_ACTIVATION_PARAMS
-                            )
-                                .cast::<u8>(),
-                        },
+            Anonymous: ManuallyDrop::new(PROPVARIANT_0_0 {
+                vt: VT_BLOB,
+                wReserved1: 0,
+                wReserved2: 0,
+                wReserved3: 0,
+                Anonymous: PROPVARIANT_0_0_0 {
+                    blob: BLOB {
+                        cbSize: size_of::<AUDIOCLIENT_ACTIVATION_PARAMS>() as u32,
+                        pBlobData: (&mut activation_params
+                            as *mut AUDIOCLIENT_ACTIVATION_PARAMS)
+                            .cast::<u8>(),
                     },
                 },
-            ),
+            }),
         },
-    };
+    });
+
+    debug!(process_id);
 
     let completion = Arc::new((
         Mutex::new(false),
@@ -248,15 +248,19 @@ pub fn create_process_iaudioclient(
         }
             .into();
 
+    debug!(process_id);
+
     let operation = unsafe {
         WinAudio::ActivateAudioInterfaceAsync(
             WinAudio::VIRTUAL_AUDIO_DEVICE_PROCESS_LOOPBACK,
             &IAudioClient::IID,
-            Some(&activation_propvariant),
+            Some(&*activation_propvariant),
             &handler,
         )
     }
         .context("failed to start process-loopback activation")?;
+
+    debug!(process_id);
 
     {
         let (lock, condition_variable) = &*completion;
@@ -278,6 +282,8 @@ pub fn create_process_iaudioclient(
         }
     }
 
+    debug!(process_id);
+
     let mut activation_result = HRESULT(0);
     let mut activated_interface: Option<IUnknown> = None;
 
@@ -288,20 +294,34 @@ pub fn create_process_iaudioclient(
         )?;
     }
 
+    debug!(process_id);
+    debug!(activation_result);
+
     activation_result
         .ok()
         .context("process-loopback activation failed")?;
 
+    debug!(process_id);
+
     let client: IAudioClient = activated_interface
         .ok_or_else(|| {
-            anyhow!(
-                "process-loopback activation returned no interface"
-            )
+            anyhow!("process-loopback activation returned no interface")
         })?
         .cast()
         .context("failed to cast interface to IAudioClient")?;
 
-    let format = get_owned_mix_format(&client)?;
+    debug!(process_id);
+
+    let format = new_waveformatextensible(
+        32,
+        32,
+        SampleType::Float,
+        48000,
+        2,
+        None,
+    )?;
+
+    debug!(process_id);
 
     unsafe {
         client.Initialize(
@@ -316,15 +336,23 @@ pub fn create_process_iaudioclient(
     }
         .context("failed to initialize process-loopback IAudioClient")?;
 
+    debug!(process_id);
+
+    thread::sleep(Duration::from_millis(2000));
+
+    debug!(process_id);
+
     Ok((client, format))
 }
 
 fn get_owned_mix_format(
     client: &IAudioClient,
 ) -> Result<WAVEFORMATEXTENSIBLE> {
+    debug!("before");
     let format_ptr = unsafe {
         client.GetMixFormat()?
     };
+    debug!("after");
 
     if format_ptr.is_null() {
         bail!("GetMixFormat returned a null pointer");
@@ -353,6 +381,76 @@ fn get_owned_mix_format(
     }
 
     Ok(format)
+}
+
+#[derive(Clone, Copy)]
+pub enum SampleType {
+    Float,
+    Pcm,
+}
+
+fn new_waveformatextensible(
+    storebits: u16,
+    validbits: u16,
+    sample_type: SampleType,
+    samplerate: u32,
+    channels: u16,
+    channel_mask: Option<u32>,
+) -> Result<WAVEFORMATEXTENSIBLE> {
+    anyhow::ensure!(channels > 0, "Invalid channel count");
+    anyhow::ensure!(samplerate > 0, "Invalid sample rate");
+    anyhow::ensure!(
+        storebits > 0 && storebits % 8 == 0,
+        "Sample container must be byte-aligned"
+    );
+    anyhow::ensure!(
+        validbits > 0 && validbits <= storebits,
+        "Invalid validbits"
+    );
+    anyhow::ensure!(
+        !matches!(sample_type, SampleType::Float)
+            || (storebits == 32 && validbits == 32),
+        "Only 32-bit float is supported"
+    );
+
+    let blockalign = u32::from(channels) * u32::from(storebits) / 8;
+    let byterate = u64::from(samplerate) * u64::from(blockalign);
+
+    anyhow::ensure!(blockalign <= u16::MAX as u32, "Block align overflow");
+    anyhow::ensure!(byterate <= u32::MAX as u64, "Byte rate overflow");
+
+    let mask = channel_mask.unwrap_or(match channels {
+        1 => 0x4,   // Front center
+        2 => 0x3,   // Front left + right
+        6 => 0x3F,  // 5.1
+        8 => 0x63F, // 7.1 surround
+        _ => 0,     // Unspecified positions
+    });
+
+    anyhow::ensure!(
+        mask == 0 || mask.count_ones() == u32::from(channels),
+        "Channel mask doesn't match channel count"
+    );
+
+    Ok(WAVEFORMATEXTENSIBLE {
+        Format: WAVEFORMATEX {
+            wFormatTag: WAVE_FORMAT_EXTENSIBLE as u16,
+            nChannels: channels,
+            nSamplesPerSec: samplerate,
+            nAvgBytesPerSec: byterate as u32,
+            nBlockAlign: blockalign as u16,
+            wBitsPerSample: storebits,
+            cbSize: 22,
+        },
+        Samples: WAVEFORMATEXTENSIBLE_0 {
+            wValidBitsPerSample: validbits,
+        },
+        dwChannelMask: mask,
+        SubFormat: match sample_type {
+            SampleType::Float => KSDATAFORMAT_SUBTYPE_IEEE_FLOAT,
+            SampleType::Pcm => KSDATAFORMAT_SUBTYPE_PCM,
+        },
+    })
 }
 
 #[windows_core::implement(WinAudio::IActivateAudioInterfaceCompletionHandler)]

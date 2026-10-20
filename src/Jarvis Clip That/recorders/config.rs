@@ -14,6 +14,7 @@ use crate::recorders::windows::{
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Config {
     pub frame_config: FrameConfig,
+    pub name: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

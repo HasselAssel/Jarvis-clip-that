@@ -87,6 +87,8 @@ pub struct RecorderStream<T> {
     pub start_time: i64, // in recorder time_base
     pub parameters: codec::Parameters,
     pub time_base: Rational,
+
+    pub name: String,
 }
 
 impl<T> RecorderStream<T> {
@@ -96,6 +98,7 @@ impl<T> RecorderStream<T> {
         parameters: codec::Parameters,
         time_base: Rational,
         start_time: i64,
+        name: String,
     ) -> Self {
         Self {
             receiver,
@@ -103,6 +106,7 @@ impl<T> RecorderStream<T> {
             start_time,
             parameters,
             time_base,
+            name,
         }
     }
 

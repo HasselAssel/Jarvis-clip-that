@@ -10,7 +10,6 @@ use ffmpeg_next::util::frame::video;
 use windows::Win32::Graphics::Direct3D11::{ID3D11Device, ID3D11Texture2D};
 use windows::Win32::System::Performance::QueryPerformanceFrequency;
 use windows_core::Interface;
-use crate::debug;
 
 use crate::recorders::traits::Encoder;
 use crate::recorders::windows::d3d11::env::EnvD3D11;

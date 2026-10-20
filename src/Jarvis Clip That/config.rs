@@ -4,13 +4,14 @@ use anyhow::{Context, Result};
 use rdev::Key;
 use serde::{Deserialize, Serialize};
 
-use crate::recorders::config::Config;
+use crate::recorders::config::{AudioCodec, Config};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AppConfig {
     pub retention_secs: i64,
     pub output_dir: String,
     pub recorders: Vec<Config>,
+    pub watch_processes: Option<(AudioCodec, bool)>,
     pub keybinds: Keybinds,
 }
 

@@ -7,7 +7,7 @@ use rdev::listen;
 
 struct Shortcuts {
     keys_sets: Vec<HashSet<Key>>,
-    action: Box<dyn FnMut() + 'static>,
+    action: Box<dyn FnMut() + Send + 'static>,
 }
 
 pub struct KeyListener {
@@ -25,7 +25,7 @@ impl KeyListener {
 
     pub fn register_shortcut<F>(&mut self, keys_sets: Vec<HashSet<Key>>, action: F)
     where
-        F: FnMut() + 'static,
+        F: FnMut() + Send + 'static,
     {
         let shortcut = Shortcuts {
             keys_sets,

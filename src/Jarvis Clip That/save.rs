@@ -15,6 +15,7 @@ pub struct SaveStream {
     pub parameters: codec::Parameters,
     pub time_base: Rational,
     pub start_time: i64, // in time_base
+    pub name: String,
 }
 
 pub struct Saver {
