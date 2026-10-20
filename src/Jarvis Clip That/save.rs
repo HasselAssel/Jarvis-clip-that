@@ -4,6 +4,7 @@ use std::path::{Path, PathBuf};
 use anyhow::{anyhow, bail, Result};
 use ffmpeg::{codec, format, Packet, Rational};
 use ffmpeg_next as ffmpeg;
+use ffmpeg_next::Dictionary;
 use ffmpeg_next::ffi::{av_compare_ts, av_rescale_q};
 
 use crate::recorders::factory::CommandSave;
@@ -129,6 +130,9 @@ impl Saver {
 
             out.set_parameters(stream.parameters.clone());
             out.set_time_base(stream.time_base);
+            out.set_metadata(Dictionary::from_iter([
+                ("title".into(), stream.name.clone()),
+            ]));
 
             unsafe {
                 (*out.parameters().as_mut_ptr()).codec_tag = 0;
@@ -204,7 +208,7 @@ impl Saver {
             comparison.cmp(&0).then_with(|| a_id.cmp(b_id))
         });
 
-        for (_, mut packet, _) in packets {
+        for (_, packet, _) in packets {
             packet.write_interleaved(&mut output)?;
         }
 

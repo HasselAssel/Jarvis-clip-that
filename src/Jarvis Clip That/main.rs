@@ -1,11 +1,8 @@
 use std::thread;
 
-use anyhow::Context;
-
 use crate::config::AppConfig;
 use crate::key_listener::KeyListener;
 use crate::recorders::factory::{Factory, FactoryCommands, FactoryResponse};
-use crate::recorders::traits::{Converter, Encoder, Source};
 use crate::recorders::windows::wasapi::process_watcher::WasApiProcessWatcher;
 use crate::save::Saver;
 

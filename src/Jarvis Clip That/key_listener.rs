@@ -34,10 +34,6 @@ impl KeyListener {
         self.shortcuts.push(shortcut);
     }
 
-    pub fn reset_keys(&mut self) {
-        self.pressed_keys.clear();
-    }
-
     pub fn start(mut self) {
         let handler = move |event: Event| {
             let key = match event.event_type {

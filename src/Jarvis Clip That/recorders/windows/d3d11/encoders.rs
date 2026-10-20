@@ -48,7 +48,7 @@ impl EncoderD3D11 {
             fps
         )?;
         let av_frame = create_av_frame(AVPixelFormat::AV_PIX_FMT_D3D11, i_width, i_height, hw_frame_ctx)?;
-        let frame = unsafe { video::Video::from(av_frame) };
+        let frame = video::Video::from(av_frame);
 
 
 
@@ -97,12 +97,10 @@ impl Encoder for EncoderD3D11 {
                     );
 
                     let tb = self.encoder.time_base();
-                    let offset = //debug!(
-                        av_rescale(
-                            *frame_qpc - start_time_in_qpc,
-                            tb.1 as i64,
-                            qpc_freq * tb.0 as i64,
-                        //)
+                    let offset = av_rescale(
+                        *frame_qpc - start_time_in_qpc,
+                        tb.1 as i64,
+                        qpc_freq * tb.0 as i64,
                     );
 
                     self.pts_offset = Some(offset);

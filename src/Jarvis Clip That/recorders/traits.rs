@@ -35,7 +35,6 @@ pub trait Driver<T> {
 
 pub trait PacketHandler {
     fn insert(container: &mut VecDeque<Self>, packet: Packet) where Self: Sized;
-    fn get_duration(&self) -> i64;
     fn get_contents(&self) -> &[Packet];
 }
 

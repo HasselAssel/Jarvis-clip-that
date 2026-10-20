@@ -13,8 +13,7 @@ use crate::debug;
 use crate::recorders::config::{AudioCodec, Config, FrameConfig, VideoCodec};
 use crate::recorders::driver::{EventDriver, PollingDriver};
 use crate::recorders::recorder::{RecorderPipeline, RecorderStream};
-use crate::recorders::ringbuffer::RingBuffer;
-use crate::recorders::traits::PacketHandler;
+use crate::recorders::ringbuffer::{KeyFrameStartPacketWrapper, RingBuffer};
 use crate::recorders::windows::{AudioEnvironment, VideoEnvironment, WasAPI};
 use crate::recorders::windows::d3d11::converters::BgraToNv12Converter;
 use crate::recorders::windows::d3d11::encoders::EncoderD3D11;
@@ -69,7 +68,7 @@ fn create_start_recorder(config: Config, retention_secs: i64, creation_moment: M
                             time_base.into(),
                         )
                     };
-                    let rs = RecorderStream::new::<RingBuffer<Packet>>(
+                    let rs = RecorderStream::new::<RingBuffer<KeyFrameStartPacketWrapper>>(
                         receiver,
                         retention_secs,
                         params,
@@ -92,23 +91,19 @@ fn create_start_recorder(config: Config, retention_secs: i64, creation_moment: M
                         WasAPI::WasApiDefaultInput => { (None, false, false) }
                     };
                     let env = EnvWasapi::new(p_id, rec, ipt)?;
-                    debug!("after env");
                     let source = SourceWasapi::new(
                         env.client.clone(),
-                        &env,
                     )?;
-                    debug!("source");
                     let converter = ConverterWasapi::new(
                         None,
                         &env,
                     );
-                    debug!("convert");
                     let (codec, frame_size, sample) = match audio_config.codec {
                         AudioCodec::Aac => (find_by_name("aac").ok_or_else(|| anyhow!("no codec!"))?, 1024, Sample::F32(Planar))
                     };
                     let ctx = codec::context::Context::new_with_codec(codec);
                     let enc = ctx.encoder().audio()?;
-                    let time_base = Rational(1, env.format.Format.nSamplesPerSec as i32);
+                    let time_base = Rational(1, env.format.format().nSamplesPerSec as i32);
                     let now_rescaled_buffer_qpc = unsafe {
                         av_rescale_q(
                             creation_moment.pos,
@@ -124,13 +119,11 @@ fn create_start_recorder(config: Config, retention_secs: i64, creation_moment: M
                         now_rescaled_buffer_qpc as i128,
                         &env,
                     )?;
-                    debug!("after enc");
                     let driver = EventDriver;
                     let params = encoder.get_params();
                     let recorder = RecorderPipeline::<
                         EnvWasapi,_,SourceWasapi,ConverterWasapi,EncoderWasapi,
                     >::new(env, driver, source, converter, encoder);
-                    debug!("after rec");
                     let now_rescaled = unsafe {
                         av_rescale_q(
                             creation_moment.pos,
@@ -146,9 +139,7 @@ fn create_start_recorder(config: Config, retention_secs: i64, creation_moment: M
                         now_rescaled,
                         config.name,
                     );
-                    debug!("before start");
                     recorder.start(sender);
-                    debug!("after start");
                     Ok(rs)
                 }
             }
@@ -257,18 +248,13 @@ impl Factory {
 
             FactoryCommands::AddRecorder(config) => {
                 debug!(&config);
-                let dbg_config = config.clone();
                 let moment = now().expect("no time :( for adding");
-                debug!(&config.name);
                 let res = create_start_recorder(config, self.retention_secs, moment);
-                debug!(&dbg_config.name);
                 if let Ok(recorder_stream) = res {
                     self.recorder_streams.push(recorder_stream);
                 } else {
-                    debug!("create_start_recorder returned Err");
                     debug!(res.err());
                 }
-                debug!(&dbg_config.name);
             }
         }
     }

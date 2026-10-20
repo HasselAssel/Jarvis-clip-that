@@ -4,6 +4,7 @@ use crate::recorders::traits::Converter;
 use crate::recorders::windows::wasapi::env::EnvWasapi;
 use crate::recorders::windows::wasapi::sources::WasApiAudioData;
 
+#[allow(dead_code)]
 pub struct ConverterWasapi {
     in_out_freq: Option<(u32, u32)>,
 }
@@ -12,8 +13,8 @@ impl ConverterWasapi {
     pub fn new(out_freq: Option<u32>, env: &<Self  as Converter>::Env<'_>) -> Self {
         Self {
             in_out_freq: out_freq
-                .filter(|&out_freq| out_freq != env.format.Format.nSamplesPerSec)
-                .map(|out_freq| (env.format.Format.nSamplesPerSec, out_freq)),
+                .filter(|&out_freq| out_freq != env.format.format().nSamplesPerSec)
+                .map(|out_freq| (env.format.format().nSamplesPerSec, out_freq)),
         }
     }
 }

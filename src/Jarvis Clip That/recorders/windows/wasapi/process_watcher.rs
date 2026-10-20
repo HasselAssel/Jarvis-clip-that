@@ -2,8 +2,6 @@ use std::collections::HashMap;
 
 use anyhow::Result;
 use crossbeam_channel::{Sender, unbounded};
-use tokio::sync::mpsc::{unbounded_channel, UnboundedSender};
-use tokio::task::JoinHandle;
 use windows::Win32::Foundation::CloseHandle;
 use windows::Win32::Media::Audio::{AudioSessionDisconnectReason, AudioSessionState, AudioSessionStateExpired, eMultimedia, eRender, IAudioSessionControl, IAudioSessionControl2, IAudioSessionManager2, IMMDeviceEnumerator, MMDeviceEnumerator};
 use windows::Win32::Media::Audio as WinAudio;
@@ -12,7 +10,6 @@ use windows::Win32::System::Com::CoTaskMemFree;
 use windows::Win32::System::Diagnostics::ToolHelp::{CreateToolhelp32Snapshot, Process32First, PROCESSENTRY32};
 use windows::Win32::System::Diagnostics::ToolHelp::Process32Next;
 use windows_core::{BOOL, GUID, Interface, PCWSTR, Ref};
-use windows_core::PWSTR;
 
 use crate::debug;
 use crate::recorders::config::{AudioCodec, AudioConfig, Config, FrameConfig};
@@ -101,7 +98,7 @@ impl WasApiProcessWatcher {
     }
 
     pub fn start(mut self) -> Result<()> {
-        let (sender, mut receiver) = unbounded();
+        let (sender, receiver) = unbounded();
 
         let session_notification: WinAudio::IAudioSessionNotification = SessionNotification {
             sender
@@ -126,9 +123,7 @@ impl WasApiProcessWatcher {
                         .entry(p_id)
                         .or_insert(HashMap::new());
                     if map.is_empty() {
-                        debug!(p_id);
                         self.cmd_send.send(FactoryCommands::AddRecorder(config))?;
-                        debug!(p_id);
                     }
                     map.insert(session_id_str, session_data);
                 },
@@ -136,9 +131,7 @@ impl WasApiProcessWatcher {
                     let map = self.session_events
                         .entry(p_id)
                         .or_insert(HashMap::new());
-                    debug!("Before remove", p_id, &session_id_str);
                     map.remove(&session_id_str);
-                    debug!("After remove", p_id);
                     if map.is_empty() {
                         //self.cmd_send.send()
                         // TODO: remove this process recorder.
@@ -188,9 +181,7 @@ impl WinAudio::IAudioSessionNotification_Impl for SessionNotification_Impl {
                 sender: self.sender.clone()
             }.into();
 
-            debug!(p_id);
             unsafe { new_session.RegisterAudioSessionNotification(&session_events) }?;
-            debug!(p_id);
 
             let session_data = SessionData {
                 event: session_events,
@@ -284,10 +275,8 @@ struct SessionData {
 
 impl Drop for SessionData {
     fn drop(&mut self) {
-        debug!("Before unregister (drop)");
         unsafe {
-            let result = self.control.UnregisterAudioSessionNotification(&self.event);
-            debug!("After unregister", result);
+            let _ = self.control.UnregisterAudioSessionNotification(&self.event);
         }
     }
 }

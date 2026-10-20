@@ -15,10 +15,6 @@ impl PacketHandler for Packet {
         container.push_back(packet);
     }
 
-    fn get_duration(&self) -> i64 {
-        self.duration()
-    }
-
     fn get_contents(&self) -> &[Packet] {
         std::slice::from_ref(self)
     }
@@ -32,10 +28,6 @@ impl PacketHandler for KeyFrameStartPacketWrapper {
 
         container.back_mut().unwrap().buffer.push(packet);
 
-    }
-
-    fn get_duration(&self) -> i64 {
-        self.buffer.iter().map(|item| item.duration()).sum()
     }
 
     fn get_contents(&self) -> &[Packet] {

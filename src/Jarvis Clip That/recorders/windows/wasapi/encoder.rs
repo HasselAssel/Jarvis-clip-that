@@ -6,12 +6,13 @@ use ffmpeg_next::ffi::av_rescale_q;
 use ffmpeg_next::format::Sample;
 use ffmpeg_next::util::format::sample;
 use ffmpeg_next::util::frame::audio;
-use windows::Win32::Media::Audio::WAVEFORMATEXTENSIBLE;
+use windows::Win32::Media::Audio::WAVE_FORMAT_PCM;
 use windows::Win32::Media::KernelStreaming::KSDATAFORMAT_SUBTYPE_PCM;
-use windows::Win32::Media::Multimedia::KSDATAFORMAT_SUBTYPE_IEEE_FLOAT;
+use windows::Win32::Media::Multimedia::{KSDATAFORMAT_SUBTYPE_IEEE_FLOAT, WAVE_FORMAT_IEEE_FLOAT};
 
 use crate::recorders::traits::Encoder;
 use crate::recorders::windows::wasapi::env::EnvWasapi;
+use crate::recorders::windows::wasapi::env::WaveFormat;
 use crate::recorders::windows::wasapi::sources::WasApiAudioData;
 
 pub struct EncoderWasapi {
@@ -41,12 +42,12 @@ impl EncoderWasapi {
         start_time: i128,
         env: &<Self as Encoder>::Env<'_>,
     ) -> Result<Self> {
-        let channel_layout = match env.format.Format.nChannels {
+        let channel_layout = match env.format.format().nChannels {
             1 => ChannelLayout::MONO,
             2 => ChannelLayout::STEREO,
             _ => return Err(anyhow!("unsupported channel layout.")),
         };
-        let input_sample = get_sample(&env.format);
+        let input_sample = get_sample(&env.format)?;
 
         if input_sample.bytes() != output_sample.bytes() {
             return Err(anyhow!("Sample conversion not supported rn."));
@@ -55,7 +56,7 @@ impl EncoderWasapi {
         let encoder = new_audio_encoder_aac(
             enc,
             codec,
-            env.format.Format.nSamplesPerSec as i32,
+            env.format.format().nSamplesPerSec as i32,
             channel_layout,
             output_sample,
         )?;
@@ -144,7 +145,7 @@ impl Encoder for EncoderWasapi {
         let mut packets = Vec::new();
         let mut packet = Packet::empty();
 
-        let block_align = env.format.Format.nBlockAlign as usize;
+        let block_align = env.format.format().nBlockAlign as usize;
         let mut missing_bytes = missing_samples * block_align;
 
         if missing_bytes > 0 {
@@ -261,27 +262,38 @@ pub fn new_audio_encoder_aac(
     Ok(audio_encoder)
 }
 
-fn get_sample(format: &WAVEFORMATEXTENSIBLE) -> Sample {
-    let bits = format.Format.wBitsPerSample;
+fn get_sample(format: &WaveFormat) -> Result<Sample> {
+    let base = format.format();
+    let bits = base.wBitsPerSample;
 
-    let sub_format = format.SubFormat;
-    if sub_format == KSDATAFORMAT_SUBTYPE_PCM {
-        match bits {
-            8 => Sample::U8(sample::Type::Packed),
-            16 => Sample::I16(sample::Type::Packed),
-            32 => Sample::I32(sample::Type::Packed),
-            64 => Sample::I64(sample::Type::Packed),
-            _ => Sample::None,
-        }
-    } else if sub_format == KSDATAFORMAT_SUBTYPE_IEEE_FLOAT {
-        match bits {
-            32 => Sample::F32(sample::Type::Packed),
-            64 => Sample::F64(sample::Type::Packed),
-            _ => Sample::None,
+    let is_float = if let Some(ext) = format.extensible() {
+        let sub_format = ext.SubFormat;
+        if sub_format == KSDATAFORMAT_SUBTYPE_IEEE_FLOAT {
+            true
+        } else if sub_format == KSDATAFORMAT_SUBTYPE_PCM {
+            false
+        } else {
+            anyhow::bail!("Unsupported audio subformat");
         }
     } else {
-        Sample::None
-    }
+        match base.wFormatTag as u32 {
+            WAVE_FORMAT_IEEE_FLOAT => true,
+            WAVE_FORMAT_PCM => false,
+            tag => anyhow::bail!("Unsupported format tag: {tag}"),
+        }
+    };
+
+    let sample = match (is_float, bits) {
+        (true, 32) => Sample::F32(sample::Type::Packed),
+        (true, 64) => Sample::F64(sample::Type::Packed),
+        (false, 8) => Sample::U8(sample::Type::Packed),
+        (false, 16) => Sample::I16(sample::Type::Packed),
+        (false, 32) => Sample::I32(sample::Type::Packed),
+        (false, 64) => Sample::I64(sample::Type::Packed),
+        _ => anyhow::bail!("Unsupported sample format: {bits} bits"),
+    };
+
+    Ok(sample)
 }
 
 pub fn copy_packed_audio_into_frame(
