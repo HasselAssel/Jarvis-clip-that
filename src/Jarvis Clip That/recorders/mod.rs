@@ -1,6 +1,12 @@
 pub mod traits;
-pub mod recorder;
-pub mod audio;
-pub mod video;
-pub mod frame;
-pub mod save;
+mod recorder;
+pub mod config;
+pub mod factory;
+mod driver;
+mod ringbuffer;
+
+#[cfg(target_os = "windows")]
+pub(crate) mod windows;
+
+#[cfg(target_os = "linux")]
+pub(crate) mod linux;

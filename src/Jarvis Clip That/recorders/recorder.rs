@@ -1,187 +1,120 @@
-use std::hint::unreachable_unchecked;
-use std::sync::{Arc, Mutex};
-use std::sync::atomic::AtomicBool;
+use std::thread;
+use std::thread::JoinHandle;
 
-use ffmpeg_next::ChannelLayout;
-use ffmpeg_next::codec::Parameters;
-use ffmpeg_next::encoder::find_by_name;
-use ffmpeg_next::format::Sample;
-use ffmpeg_next::format::sample::Type;
-use ffmpeg_next::sys::AVPixelFormat::{AV_PIX_FMT_D3D11, AV_PIX_FMT_QSV};
+use anyhow::Result;
+use crossbeam_channel::{Receiver, Sender};
+use ffmpeg_next::{codec, Packet, Rational};
 
-use crate::error::Error::Unknown;
-use crate::recorders::audio::audio_recorder::AudioRecorder;
-use crate::recorders::audio::sources::enums::{AudioCodec, AudioSourceType};
-use crate::recorders::audio::sources::wasapi::aac::{AAC_FRAME_SIZE, AacContext};
-use crate::recorders::audio::sources::wasapi::source::AudioSourceWasapi;
-use crate::recorders::audio::sources::wasapi::traits::new_audio_encoder_aac;
-use crate::recorders::frame::{create_audio_frames, create_av_frame};
-use crate::recorders::traits::TRecorder;
-use crate::recorders::video::sources::d3d111::d3d11av::D3d11vaAdapter;
-use crate::recorders::video::sources::d3d111::qsv::QsvAdapter;
-use crate::recorders::video::sources::d3d111::source::VideoSourceD3d11;
-use crate::recorders::video::sources::d3d111::traits::{create_encoder_d3d11, D3d11EncoderHwContext};
-use crate::recorders::video::sources::enums::{VideoCodec, VideoSourceType};
-use crate::recorders::video::video_recorder::VideoRecorder;
-use crate::ring_buffer::traits::PacketRingBuffer;
-use crate::types::{RecorderJoinHandle, Result};
-use crate::wrappers::MaybeSafeFFIPtrWrapper;
+use crate::debug;
+use crate::recorders::traits::{Converter, Driver, Encoder, RingBuffer, Source};
 
-pub struct Recorder<PRB: PacketRingBuffer> {
-    recorder: Option<Box<dyn TRecorder<PRB> + Send>>,
-    pub ring_buffer: Arc<Mutex<PRB>>,
-    pub parameters: Parameters,
-    pub start_delay_secs: f64,
+pub struct RecorderPipeline<Env, D, S, C, E> {
+    env: Env,
+    driver: D,
+    source: S,
+    converter: C,
+    encoder: E,
 }
 
-impl<PRB: PacketRingBuffer> Recorder<PRB> {
-    fn from_recorder<R: TRecorder<PRB> + 'static + Send>(
-        recorder: R,
-        ring_buffer: Arc<Mutex<PRB>>,
-        parameters: Parameters,
-        start_delay_secs: f64,
+impl<Env, D, S, C, E> RecorderPipeline<Env, D, S, C, E>
+where
+    D: Driver<Env>,
+    for<'e> S: Source<Env<'e> = Env>,
+    for<'e> C: Converter<Env<'e> = Env>,
+    for<'e> E: Encoder<Env<'e> = Env>,
+    for<'a> S: Source<Output<'a> = <C as Converter>::Input<'a>>,
+    for<'a> C: Converter<Output<'a> = <E as Encoder>::Input<'a>>,
+{
+    pub fn new(
+        env: Env,
+        driver: D,
+        source: S,
+        converter: C,
+        encoder: E,
     ) -> Self {
-        let recorder = Box::new(recorder);
-        Self::from_boxed_recorder(recorder, ring_buffer, parameters, start_delay_secs)
-    }
-
-    fn from_boxed_recorder(
-        recorder: Box<dyn TRecorder<PRB> + Send>,
-        ring_buffer: Arc<Mutex<PRB>>,
-        parameters: Parameters,
-        start_delay_secs: f64
-    ) -> Self {
-        let recorder = Some(recorder);
         Self {
-            recorder,
-            ring_buffer,
-            parameters,
-            start_delay_secs,
+            env,
+            driver,
+            source,
+            converter,
+            encoder,
         }
     }
 
-    pub fn start_recording(
-        &mut self,
-        stop_capturing_callback: Option<Arc<AtomicBool>>,
-    ) -> Option<RecorderJoinHandle> {
-        self.recorder.take().map(|recorder| {
-            recorder.start_capturing(stop_capturing_callback)
+    fn next(&mut self) -> Result<<E as Encoder>::Output> {
+        let source_frame = self.source.next_frame(&self.env)?;
+        let converted_frame = self.converter.convert(source_frame, &self.env)?;
+        self.encoder.encode(converted_frame, &self.env)
+    }
+
+    pub fn start(
+        mut self,
+        channel_send: Sender<E::Output>,
+    ) -> JoinHandle<()>
+    where
+        D: Send + 'static,
+        Env: Send + 'static,
+        S: Send + 'static,
+        C: Send + 'static,
+        E: Send + 'static,
+        <E as Encoder>::Output: Send,
+    {
+        thread::spawn(move || {
+            self.driver.start(&mut self.env);
+            loop {
+                let res = self.next();
+                if let Ok(next) = res {
+                    if channel_send.send(next).is_err() {
+                        return
+                    }
+                } else {
+                    debug!(res.err());
+                }
+
+                self.driver.wait(&mut self.env);
+            }
         })
     }
 }
 
 
-pub fn create_video_recorder<PRB: PacketRingBuffer + 'static>(
-    video_source_type: &VideoSourceType,
-    video_codec: &VideoCodec,
-    min_secs: u32,
-    width: u32,
-    height: u32,
-    fps: i32,
-    start_delay_secs: f64,
-) -> Result<Recorder<PRB>> {
-    let ring_buffer = PRB::new(min_secs * fps as u32);
-    let arc_ring_buffer = Arc::new(Mutex::new(ring_buffer));
 
-    let codec = match video_codec {
-        VideoCodec::Amf => { find_by_name("hevc_amf").ok_or(ffmpeg_next::Error::EncoderNotFound)? }
-        VideoCodec::Qsv => { return Err(ffmpeg_next::Error::EncoderNotFound.into()); }
-    };
-    let ctx = ffmpeg_next::codec::context::Context::new_with_codec(codec);
-    let enc = ctx.encoder().video()?;
+pub struct RecorderStream<T> {
+    pub receiver: Receiver<T>,
 
-    let idk = match video_source_type {
-        VideoSourceType::D3d11 { monitor_id } => {
-            match video_codec {
-                VideoCodec::Amf => {
-                    let d3d11_vs = VideoSourceD3d11::new(*monitor_id, D3d11vaAdapter)?;
-                    let (hw_device_ctx, hw_frame_ctx) = d3d11_vs.encoder_hw_ctx.setup_hw_and_frame_ctx(&d3d11_vs.device, width as i32, height as i32)?;
-                    let encoder = create_encoder_d3d11(enc, codec, (hw_device_ctx, hw_frame_ctx), width, height, fps)?;
-                    let parameters = Parameters::from(&encoder);
-                    let av_frame = create_av_frame(AV_PIX_FMT_D3D11, width as i32, height as i32, hw_frame_ctx)?;
-                    let recorder = VideoRecorder::new(arc_ring_buffer.clone(), d3d11_vs, encoder, MaybeSafeFFIPtrWrapper(av_frame), width, height, fps as f64);
-                    Recorder::from_recorder(recorder, arc_ring_buffer, parameters, start_delay_secs)
-                }
-                VideoCodec::Qsv => {
-                    let d3d11_vs = VideoSourceD3d11::new(*monitor_id, QsvAdapter)?;
-                    let (hw_device_ctx, hw_frame_ctx) = d3d11_vs.encoder_hw_ctx.setup_hw_and_frame_ctx(&d3d11_vs.device, width as i32, height as i32)?;
-                    let encoder = create_encoder_d3d11(enc, codec, (hw_device_ctx, hw_frame_ctx), width, height, fps)?;
-                    let parameters = Parameters::from(&encoder);
-                    let av_frame = create_av_frame(AV_PIX_FMT_QSV, width as i32, height as i32, hw_frame_ctx)?;
-                    let recorder = VideoRecorder::new(arc_ring_buffer.clone(), d3d11_vs, encoder, MaybeSafeFFIPtrWrapper(av_frame), width, height, fps as f64);
-                    Recorder::from_recorder(recorder, arc_ring_buffer, parameters, start_delay_secs)
-                }
-            }
-        }
-    };
-    Ok(idk)
+    packets_ring_buffer: Box<dyn RingBuffer<Packet> + Send>,
+
+    pub start_time: i64, // in recorder time_base
+    pub parameters: codec::Parameters,
+    pub time_base: Rational,
+
+    pub name: String,
 }
 
-
-pub fn create_audio_recorder<PRB: PacketRingBuffer + 'static>(
-    audio_source_type: &AudioSourceType,
-    audio_code_c: &AudioCodec,
-    min_secs: u32,
-    start_delay_secs: f64,
-) -> Result<Recorder<PRB>> {
-    let create_ring_buffer = |rate| -> Arc<Mutex<PRB>>{
-        let ring_buffer = PRB::new(min_secs * rate);
-        Arc::new(Mutex::new(ring_buffer))
-    };
-
-    let codec = match audio_code_c {
-        AudioCodec::AAC => { ffmpeg_next::codec::encoder::find(ffmpeg_next::codec::Id::AAC).ok_or(ffmpeg_next::Error::EncoderNotFound)? }
-        //AudioCodec::Test => { return Err(ffmpeg_next::Error::EncoderNotFound.into()); }
-    };
-    let ctx = ffmpeg_next::codec::context::Context::new_with_codec(codec);
-    let enc = ctx.encoder().audio()?;
-
-    let idk = match audio_source_type {
-        AudioSourceType::WasApiDefaultSys | AudioSourceType::WasApiDefaultInput => {
-            let render_else_capture = match audio_source_type {
-                AudioSourceType::WasApiDefaultSys => { true }
-                AudioSourceType::WasApiDefaultInput => { false }
-                _ => { unsafe { unreachable_unchecked() } }
-            };
-
-            match audio_code_c {
-                AudioCodec::AAC => {
-                    let sample = Sample::F32(Type::Planar);
-                    let aac_vs = AudioSourceWasapi::new_default(AacContext, render_else_capture)?;
-                    let channel_layout = match aac_vs.format.nChannels {
-                        1 => ChannelLayout::MONO,
-                        2 => ChannelLayout::STEREO,
-                        _ => return Err(Unknown.into())
-                    };
-                    let (frame, silent_frame) = create_audio_frames(sample, AAC_FRAME_SIZE, channel_layout);
-                    let encoder = new_audio_encoder_aac(enc, codec, aac_vs.format.nSamplesPerSec as i32, channel_layout, sample)?;
-                    let parameters = Parameters::from(&encoder);
-                    let arc_ring_buffer = create_ring_buffer(aac_vs.format.nSamplesPerSec);
-                    let recorder = AudioRecorder::new(arc_ring_buffer.clone(), aac_vs, encoder, frame, silent_frame);
-                    Recorder::from_recorder(recorder, arc_ring_buffer, parameters, start_delay_secs)
-                }
-            }
+impl<T> RecorderStream<T> {
+    pub fn new<R: RingBuffer<Packet> + Send + 'static> (
+        receiver: Receiver<T>,
+        retention_secs: i64,
+        parameters: codec::Parameters,
+        time_base: Rational,
+        start_time: i64,
+        name: String,
+    ) -> Self {
+        Self {
+            receiver,
+            packets_ring_buffer: Box::new(<R as RingBuffer<Packet>>::new(retention_secs * time_base.1 as i64 / time_base.0 as i64)),
+            start_time,
+            parameters,
+            time_base,
+            name,
         }
-        AudioSourceType::WasApiProcess { process_id, include_tree } => {
-            match audio_code_c {
-                AudioCodec::AAC => {
-                    let sample = Sample::F32(Type::Planar);
-                    let aac_vs = AudioSourceWasapi::new_process(AacContext, *process_id, *include_tree)?;
-                    let channel_layout = match aac_vs.format.nChannels {
-                        1 => ChannelLayout::MONO,
-                        2 => ChannelLayout::STEREO,
-                        _ => return Err(Unknown.into())
-                    };
-                    let (frame, silent_frame) = create_audio_frames(sample, AAC_FRAME_SIZE, channel_layout);
-                    let encoder = new_audio_encoder_aac(enc, codec, aac_vs.format.nSamplesPerSec as i32, channel_layout, sample)?;
-                    let parameters = Parameters::from(&encoder);
-                    let arc_ring_buffer = create_ring_buffer(aac_vs.format.nSamplesPerSec);
-                    let recorder = AudioRecorder::new(arc_ring_buffer.clone(), aac_vs, encoder, frame, silent_frame);
-                    Recorder::from_recorder(recorder, arc_ring_buffer, parameters, start_delay_secs)
-                }
-            }
-        }
-    };
+    }
 
-    Ok(idk)
+    pub fn insert(&mut self, packets: Vec<Packet>) {
+        packets.into_iter().for_each(|packet| self.packets_ring_buffer.insert(packet));
+    }
+
+    pub fn copy_out(&self) -> Vec<Packet> {
+        self.packets_ring_buffer.copy_out()
+    }
 }

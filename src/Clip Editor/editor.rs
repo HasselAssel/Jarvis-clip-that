@@ -1,14 +1,20 @@
-use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+use std::sync::atomic::AtomicBool;
+use std::sync::atomic::AtomicU32;
+use std::sync::atomic::Ordering;
 use std::sync::mpsc as sync_mpsc;
+use std::sync::Arc;
 use std::thread;
 
 use eframe::egui;
 use tokio::sync::mpsc as tokio_mpsc;
 
-use crate::egui::{EditorGui, GUIMessage, WorkerMessage};
+use crate::egui::EditorGui;
+use crate::egui::GUIMessage;
+use crate::egui::WorkerMessage;
 use crate::media::Media;
-use crate::media_playback::{AudioSettings, MediaPlayback, VideoSettings};
+use crate::media_playback::AudioSettings;
+use crate::media_playback::MediaPlayback;
+use crate::media_playback::VideoSettings;
 
 pub struct ClipEditor {
     worker_message_sender: sync_mpsc::Sender<WorkerMessage>,
@@ -59,15 +65,24 @@ impl ClipEditor {
         });
 
         let options = eframe::NativeOptions {
-            viewport: egui::ViewportBuilder::default()
-                .with_inner_size([1500., 1000.]),
+            viewport: egui::ViewportBuilder::default().with_inner_size([1500., 1000.]),
             ..Default::default()
         };
 
         let _ = eframe::run_native(
             "Clip Editor",
             options,
-            Box::new(|cc| Ok(Box::new(EditorGui::new(cc, ctx_tx, width, height, media_length, worker_message_receiver, gui_message_sender)))),
+            Box::new(|cc| {
+                Ok(Box::new(EditorGui::new(
+                    cc,
+                    ctx_tx,
+                    width,
+                    height,
+                    media_length,
+                    worker_message_receiver,
+                    gui_message_sender,
+                )))
+            }),
         );
     }
 
@@ -82,10 +97,15 @@ impl ClipEditor {
         let cond = Arc::new(AtomicBool::new(false));
         let cond_ = cond.clone();
 
-        let mut media_playback = MediaPlayback::new(media, self.video_settings, self.audio_settings, 3.0);
-        let (global_volume, volumes) = media_playback.dummy_callback_insert(ctx, &self.worker_message_sender).await;
+        let mut media_playback =
+            MediaPlayback::new(media, self.video_settings, self.audio_settings, 3.0);
+        let (global_volume, volumes) = media_playback
+            .dummy_callback_insert(ctx, &self.worker_message_sender)
+            .await;
         for (index, _) in &volumes {
-            self.worker_message_sender.send(WorkerMessage::AddAudioTrack(*index)).unwrap();
+            self.worker_message_sender
+                .send(WorkerMessage::AddAudioTrack(*index))
+                .unwrap();
         }
 
         let mut video_handles = media_playback.get_handles();

@@ -1,6 +1,6 @@
-use std::sync::Arc;
 use std::sync::atomic::Ordering;
 use std::sync::mpsc::Receiver;
+use std::sync::Arc;
 use std::time::Duration;
 
 use atomic_float::AtomicF32;
@@ -20,17 +20,26 @@ impl Iterator for LiveSource {
     type Item = f32;
 
     fn next(&mut self) -> Option<Self::Item> {
-        self.receiver.recv().ok().map(|s| s * &self.volume.load(Ordering::SeqCst) * &self.gloabl_volume.load(Ordering::SeqCst))
+        self.receiver.recv().ok().map(|s| {
+            s * &self.volume.load(Ordering::SeqCst) * &self.gloabl_volume.load(Ordering::SeqCst)
+        })
     }
 }
 
 impl Source for LiveSource {
-    fn current_frame_len(&self) -> Option<usize> { None }
-    fn channels(&self) -> u16 { self.channels }
-    fn sample_rate(&self) -> u32 { self.sample_rate }
-    fn total_duration(&self) -> Option<Duration> { None }
+    fn current_frame_len(&self) -> Option<usize> {
+        None
+    }
+    fn channels(&self) -> u16 {
+        self.channels
+    }
+    fn sample_rate(&self) -> u32 {
+        self.sample_rate
+    }
+    fn total_duration(&self) -> Option<Duration> {
+        None
+    }
 }
-
 
 pub fn frame_to_interleaved_f32(frame: &Audio) -> Vec<f32> {
     let nb_samples = frame.samples();
@@ -65,8 +74,7 @@ pub fn frame_to_interleaved_f32(frame: &Audio) -> Vec<f32> {
         Sample::F64(_) => {
             for chunk in plane.chunks_exact(8) {
                 let s = f64::from_le_bytes([
-                    chunk[0], chunk[1], chunk[2], chunk[3],
-                    chunk[4], chunk[5], chunk[6], chunk[7],
+                    chunk[0], chunk[1], chunk[2], chunk[3], chunk[4], chunk[5], chunk[6], chunk[7],
                 ]);
                 out.push(s as f32);
             }

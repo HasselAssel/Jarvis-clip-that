@@ -1,11 +1,7 @@
 use egui_wgpu::wgpu;
 use ffmpeg_next::frame;
 
-pub fn new_rgb_texture(
-    device: &wgpu::Device,
-    width: u32,
-    height: u32,
-) -> wgpu::Texture {
+pub fn new_rgb_texture(device: &wgpu::Device, width: u32, height: u32) -> wgpu::Texture {
     let texture = device.create_texture(&wgpu::TextureDescriptor {
         label: Some("rgb texture"),
         size: wgpu::Extent3d {

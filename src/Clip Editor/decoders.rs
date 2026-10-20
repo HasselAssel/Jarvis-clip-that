@@ -1,5 +1,7 @@
-use ffmpeg_next::{decoder, frame};
-use ffmpeg_next::format::{Pixel, Sample};
+use ffmpeg_next::decoder;
+use ffmpeg_next::format::Pixel;
+use ffmpeg_next::format::Sample;
+use ffmpeg_next::frame;
 use ffmpeg_next::software::scaling;
 use ffmpeg_next::software::scaling::Flags;
 
@@ -31,8 +33,8 @@ impl FfmpegDecoder for VideoDecoder {
                 self.out_width,
                 self.out_height,
                 Flags::FAST_BILINEAR,
-            ).unwrap();
-
+            )
+            .unwrap();
 
             let mut rgb_frame = frame::Video::empty();
             scaler.run(&mut video_frame, &mut rgb_frame).unwrap();
