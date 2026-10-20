@@ -5,7 +5,6 @@ use std::sync::Mutex;
 use std::time::Duration;
 
 use anyhow::{anyhow, bail, Context, Result};
-use ffmpeg_next::format::{Sample, sample};
 use windows::core::HRESULT;
 use windows::core::Interface;
 use windows::core::IUnknown;
@@ -43,7 +42,6 @@ use windows::Win32::System::Threading::INFINITE;
 use windows::Win32::System::Threading::WaitForSingleObject;
 use windows::Win32::System::Variant::VT_BLOB;
 
-use crate::debug;
 use crate::recorders::traits::Event;
 
 pub struct EnvWasapi {
@@ -202,10 +200,6 @@ impl WaveFormat {
         })
     }
 
-    pub fn as_ptr(&self) -> *const WAVEFORMATEX {
-        self.ptr
-    }
-
     pub fn format(&self) -> &WAVEFORMATEX {
         unsafe { &*self.ptr }
     }
@@ -270,7 +264,7 @@ fn create_default_iaudioclient(
         )
     }.context("failed to activate IAudioClient")?;
 
-    let mut format = WaveFormat::new(&client)?;
+    let format = WaveFormat::new(&client)?;
 
     unsafe {
         client.Initialize(
