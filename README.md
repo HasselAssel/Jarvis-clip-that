@@ -63,6 +63,7 @@ type = "was_api"
 [recorders.frame_config.config.environment.config]
 type = "was_api_default_sys"
 
+
 [[recorders]]
 name = "Default Input"
 
