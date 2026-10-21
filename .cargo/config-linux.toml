@@ -1,0 +1,2 @@
+[env]
+FFMPEG_STATIC = "0"

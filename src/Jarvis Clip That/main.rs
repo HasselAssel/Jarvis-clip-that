@@ -7,6 +7,7 @@ use rodio::{Decoder, Sink};
 use crate::config::AppConfig;
 use crate::key_listener::KeyListener;
 use crate::recorders::factory::{Factory, FactoryCommands, FactoryResponse};
+#[cfg(target_os = "windows")]
 use crate::recorders::windows::wasapi::process_watcher::WasApiProcessWatcher;
 use crate::save::Saver;
 
@@ -81,6 +82,7 @@ fn main() {
         key_listener.start();
     });
 
+    #[cfg(target_os = "windows")]
     if let Some((codec, include_tree)) = app_config.watch_processes {
         let watcher = WasApiProcessWatcher::new(codec, include_tree, cmd_send).expect("Can't create watcher");
         watcher.start().expect("Watcher Panicked");

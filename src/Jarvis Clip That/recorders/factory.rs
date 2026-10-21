@@ -14,20 +14,31 @@ use crate::recorders::config::{AudioCodec, Config, FrameConfig, VideoCodec};
 use crate::recorders::driver::{EventDriver, PollingDriver};
 use crate::recorders::recorder::{RecorderPipeline, RecorderStream};
 use crate::recorders::ringbuffer::{KeyFrameStartPacketWrapper, RingBuffer};
-use crate::recorders::windows::{AudioEnvironment, VideoEnvironment, WasAPI};
-use crate::recorders::windows::d3d11::converters::BgraToNv12Converter;
-use crate::recorders::windows::d3d11::encoders::EncoderD3D11;
-use crate::recorders::windows::d3d11::env::EnvD3D11;
-use crate::recorders::windows::d3d11::sources::SourceD3d11;
-use crate::recorders::windows::wasapi::converter::ConverterWasapi;
-use crate::recorders::windows::wasapi::encoder::EncoderWasapi;
-use crate::recorders::windows::wasapi::env::EnvWasapi;
-use crate::recorders::windows::wasapi::sources::SourceWasapi;
+#[cfg(target_os = "windows")]
+use crate::recorders::windows::{
+    AudioEnvironment,
+    VideoEnvironment,
+    WasAPI,
+    d3d11::{
+        converters::BgraToNv12Converter,
+        encoders::EncoderD3D11,
+        env::EnvD3D11,
+        sources::SourceD3d11,
+    },
+    wasapi::{
+        converter::ConverterWasapi,
+        encoder::EncoderWasapi,
+        env::EnvWasapi,
+        sources::SourceWasapi,
+    },
+};
+
 use crate::save::SaveStream;
 use crate::timing::{Moment, now};
 
 fn create_start_recorder(config: Config, retention_secs: i64, creation_moment: Moment) -> Result<RecorderStream<Vec<Packet>>> {
     let (sender, receiver) = crossbeam_channel::unbounded();
+    #[cfg(target_os = "windows")]
     match config.frame_config {
         FrameConfig::Video(video_config) => {
             match video_config.environment {
@@ -143,6 +154,13 @@ fn create_start_recorder(config: Config, retention_secs: i64, creation_moment: M
                     Ok(rs)
                 }
             }
+        }
+    }
+    #[cfg(target_os = "linux")]
+    match config.frame_config {
+        _ => {
+            todo!();
+            let _ = sender.send(1);
         }
     }
 }

@@ -1,5 +1,8 @@
-use windows::Win32::System::Performance::QueryPerformanceCounter;
-use windows::Win32::System::Performance::QueryPerformanceFrequency;
+#[cfg(target_os = "windows")]
+use windows::Win32::System::Performance::{
+    QueryPerformanceCounter,
+    QueryPerformanceFrequency,
+};
 
 #[derive(Clone)]
 pub struct Moment {
