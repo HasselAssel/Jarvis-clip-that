@@ -1,4 +1,3 @@
-use std::thread;
 use std::time::Duration;
 
 use anyhow::{anyhow, Result};
@@ -17,14 +16,14 @@ use crate::recorders::ringbuffer::{KeyFrameStartPacketWrapper, RingBuffer};
 #[cfg(target_os = "windows")]
 use crate::recorders::windows::{
     AudioEnvironment,
-    VideoEnvironment,
-    WasAPI,
     d3d11::{
         converters::BgraToNv12Converter,
         encoders::EncoderD3D11,
         env::EnvD3D11,
         sources::SourceD3d11,
     },
+    VideoEnvironment,
+    WasAPI,
     wasapi::{
         converter::ConverterWasapi,
         encoder::EncoderWasapi,
@@ -32,7 +31,6 @@ use crate::recorders::windows::{
         sources::SourceWasapi,
     },
 };
-
 use crate::save::SaveStream;
 use crate::timing::{Moment, now};
 
@@ -79,15 +77,16 @@ fn create_start_recorder(config: Config, retention_secs: i64, creation_moment: M
                             time_base.into(),
                         )
                     };
+                    let handle = recorder.start(sender);
                     let rs = RecorderStream::new::<RingBuffer<KeyFrameStartPacketWrapper>>(
                         receiver,
+                        handle,
                         retention_secs,
                         params,
                         time_base,
                         now_rescaled,
                         config.name
                     );
-                    recorder.start(sender);
 
                     Ok(rs)
                 }
@@ -142,15 +141,17 @@ fn create_start_recorder(config: Config, retention_secs: i64, creation_moment: M
                             time_base.into(),
                         )
                     };
+                    let handle = recorder.start(sender);
                     let rs = RecorderStream::new::<RingBuffer<Packet>>(
                         receiver,
+                        handle,
                         retention_secs,
                         params,
                         time_base,
                         now_rescaled,
                         config.name,
                     );
-                    recorder.start(sender);
+
                     Ok(rs)
                 }
             }
@@ -197,48 +198,54 @@ impl Factory {
     }
 
     pub fn start(mut self) {
-        thread::spawn(move || {
-            loop {
-                let event = {
-                    let mut select = Select::new();
-
-                    select.recv(&self.command_receiver);
-
-                    for stream in self.recorder_streams.iter() {
-                        select.recv(&stream.receiver);
+        loop {
+            let event = {
+                self.recorder_streams.retain(|recorder| {
+                    let finished = recorder.recorder_join_handle.is_finished();
+                    if finished {
+                        debug!(&recorder.name);
                     }
+                    !finished
+                });
 
-                    let operation = select.select();
-                    let mut index = operation.index();
+                let mut select = Select::new();
+                select.recv(&self.command_receiver);
 
-                    if index == 0 { // command received // todo cleanup
-                        let result = operation.recv(&self.command_receiver);
-                        if let Ok(command) = result {
-                            self.handle_command(command);
-                        }
-                        // TODO: inf loop Err from command receiver if all sender dropped
-                        continue
+                for stream in &self.recorder_streams {
+                    select.recv(&stream.receiver);
+                }
+
+                let operation = select.select();
+                let mut index = operation.index();
+
+                if index == 0 { // command received // todo cleanup
+                    let result = operation.recv(&self.command_receiver);
+                    if let Ok(command) = result {
+                        self.handle_command(command);
                     }
+                    // TODO: inf loop Err from command receiver if all sender dropped
+                    continue
+                }
 
-                    index -= 1;
+                index -= 1;
 
-                    let result = operation.recv(&self.recorder_streams[index].receiver);
+                let result = operation.recv(&self.recorder_streams[index].receiver);
 
-                    (index, result)
-                };
+                (index, result)
+            };
 
-                let (index, result) = event;
+            let (index, result) = event;
 
-                match result {
-                    Ok(packets) => {
-                        self.recorder_streams[index].insert(packets);
-                    }
-                    Err(_) => {
-                        self.recorder_streams.swap_remove(index);
-                    }
+            match result {
+                Ok(packets) => {
+                    self.recorder_streams[index].insert(packets);
+                }
+                Err(err) => {
+                    debug!(err);
+                    self.recorder_streams.swap_remove(index);
                 }
             }
-        });
+        }
     }
 
     fn handle_command(&mut self, command: FactoryCommands) {

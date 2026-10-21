@@ -27,7 +27,9 @@ fn main() {
     let (resp_send, resp_recv) = crossbeam_channel::unbounded();
 
     let factory = Factory::new(app_config.retention_secs, cmd_recv, resp_send);
-    factory.start();
+    thread::spawn(move || {
+        factory.start();
+    });
 
     for recorder_config in app_config.recorders {
         cmd_send.send(FactoryCommands::AddRecorder(recorder_config)).unwrap();

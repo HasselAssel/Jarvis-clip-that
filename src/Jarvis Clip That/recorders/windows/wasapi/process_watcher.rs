@@ -118,6 +118,7 @@ impl WasApiProcessWatcher {
         while let Ok(cmd) = receiver.recv() {
             match cmd {
                 Command::AddProcess(session_id_str, p_id, session_data) => {
+                    debug!(&session_id_str, p_id);
                     let config = self.config(p_id);
                     let map = self.session_events
                         .entry(p_id)
@@ -128,6 +129,7 @@ impl WasApiProcessWatcher {
                     map.insert(session_id_str, session_data);
                 },
                 Command::RemoveProcess(session_id_str, p_id) => {
+                    debug!(&session_id_str, p_id);
                     let map = self.session_events
                         .entry(p_id)
                         .or_insert(HashMap::new());

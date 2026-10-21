@@ -62,13 +62,18 @@ where
         thread::spawn(move || {
             self.driver.start(&mut self.env);
             loop {
-                let res = self.next();
-                if let Ok(next) = res {
-                    if channel_send.send(next).is_err() {
-                        return
+                match self.next() {
+                    Ok(next) => {
+                        if channel_send.send(next).is_err() {
+                            return
+                        }
+                    },
+                    Err(e) if e.to_string() == "fatal" => {
+                        return;
                     }
-                } else {
-                    debug!(res.err());
+                    Err(err) => {
+                        debug!(err);
+                    }
                 }
 
                 self.driver.wait(&mut self.env);
@@ -77,10 +82,9 @@ where
     }
 }
 
-
-
 pub struct RecorderStream<T> {
     pub receiver: Receiver<T>,
+    pub recorder_join_handle: JoinHandle<()>,
 
     packets_ring_buffer: Box<dyn RingBuffer<Packet> + Send>,
 
@@ -94,6 +98,7 @@ pub struct RecorderStream<T> {
 impl<T> RecorderStream<T> {
     pub fn new<R: RingBuffer<Packet> + Send + 'static> (
         receiver: Receiver<T>,
+        recorder_join_handle: JoinHandle<()>,
         retention_secs: i64,
         parameters: codec::Parameters,
         time_base: Rational,
@@ -102,6 +107,7 @@ impl<T> RecorderStream<T> {
     ) -> Self {
         Self {
             receiver,
+            recorder_join_handle,
             packets_ring_buffer: Box::new(<R as RingBuffer<Packet>>::new(retention_secs * time_base.1 as i64 / time_base.0 as i64)),
             start_time,
             parameters,
