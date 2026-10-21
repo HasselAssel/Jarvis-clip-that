@@ -59,7 +59,7 @@ impl Saver {
         }
     }
 
-    fn write_clip(&self, path: &Path, save: CommandSave) -> Result<()> { // Todo: audio still not synced!!! idk why check out folder !!! use time to cut unwanted packets that were still floating in the buffer.
+    fn write_clip(&self, path: &Path, save: CommandSave) -> Result<()> { // TODO: Check for keyframe before cutting packets!
         let mut streams = save.streams;
 
         for stream in &mut streams {
