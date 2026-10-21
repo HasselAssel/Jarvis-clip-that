@@ -28,4 +28,6 @@ impl AppConfig {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Keybinds {
     pub save_clip: Vec<Vec<Key>>,
+    pub save_clip_sound_file: Option<String>,
+    pub save_clip_sound_volume: Option<f32>,
 }

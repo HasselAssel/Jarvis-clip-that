@@ -12,21 +12,24 @@ Currently Supported:
   - D3D11 Desktop Duplication
 - Linux:
   - in development :(
-- Minimal Clip "Editor" to edit and export clips:
-  - - in development :(
+- Minimal clip "editor" to edit and export clips:
+  - in development :(
+
+The config.toml must be in `config/config.toml` relative to the .exe right now.
 
 Example `config.toml`:
 ```toml file="config.toml"
-retention_secs = 120
-output_dir = "out"
+retention_secs = 60
+output_dir = "C:\\Jarvis-Clips\\clips"
 
-# Have the program automatically scan for new processes that produce audio.
-watch_processes = ["aac", true] 
+watch_processes = ["aac", true]
 
 [keybinds]
 save_clip = [
-    ["Alt", "KeyM"]
+  ["Alt", "KeyM"]
 ]
+save_clip_sound_file = "sounds\\BOOM.mp3"
+save_clip_sound_volume = 0.05
 
 [[recorders]]
 name = "Main Screen: 0"
@@ -36,7 +39,6 @@ type = "video"
 
 [recorders.frame_config.config]
 fps = 30
-# In progress: have the program figure out the width and height.
 width = 2560
 height = 1440
 codec = "hevc_amf"
@@ -75,5 +77,4 @@ type = "was_api"
 
 [recorders.frame_config.config.environment.config]
 type = "was_api_default_input"
-
 ```

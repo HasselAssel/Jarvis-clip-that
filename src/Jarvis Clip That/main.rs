@@ -1,4 +1,8 @@
-use std::thread;
+use std::{fs, thread};
+use std::io::Cursor;
+use std::sync::Arc;
+
+use rodio::{Decoder, Sink};
 
 use crate::config::AppConfig;
 use crate::key_listener::KeyListener;
@@ -32,13 +36,44 @@ fn main() {
 
     let mut saver = Saver::new(app_config.output_dir).unwrap();
 
-    let keys = app_config.keybinds.save_clip.iter().map(|keys| keys.iter().cloned().collect()).collect();
+    let keys = app_config.keybinds.save_clip
+        .iter()
+        .map(|keys| keys.iter().cloned().collect())
+        .collect();
+
+    let save_sound = app_config.keybinds.save_clip_sound_file
+        .and_then(|file| fs::read(file).ok())
+        .and_then(|buffer|
+            Some((
+                Arc::from(buffer),
+                app_config.keybinds.save_clip_sound_volume.unwrap_or(1.)
+            ))
+    );
+
     let cmd_send_k = cmd_send.clone();
     key_listener.register_shortcut(keys, move || {
         cmd_send_k.send(FactoryCommands::Save).unwrap();
         let FactoryResponse::Save(save) = resp_recv.recv().unwrap(); {
-            let path = saver.save(save).unwrap();
-            debug!(path);
+            match saver.save(save) {
+                Ok(path) => {
+                    if let Some((save_sound_buffer, save_sound_volume)) = save_sound.clone() {
+                        thread::spawn(move || {
+                            let source = Decoder::new(Cursor::new(save_sound_buffer))?;
+                            let (_stream, handle) = rodio::OutputStream::try_default()?;
+                            let sink = Sink::try_new(&handle)?;
+                            sink.append(source);
+                            sink.set_volume(save_sound_volume);
+                            sink.sleep_until_end();
+                            Ok::<(), anyhow::Error>(())
+                        });
+                    }
+
+                    debug!(path);
+                }
+                Err(err) => {
+                    debug!(err);
+                }
+            }
         }
     });
 
