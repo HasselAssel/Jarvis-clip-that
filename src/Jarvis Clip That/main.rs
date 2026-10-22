@@ -20,6 +20,8 @@ mod config;
 mod timing;
 
 fn main() {
+    ffmpeg_next::init().unwrap_or_else(|e| panic!("ffmpeg_next init failed: {e}"));
+
     let config_path = "config/config.toml";
     let app_config = AppConfig::load(config_path).expect(&format!("Invalid config, check {:?}", config_path));
 
