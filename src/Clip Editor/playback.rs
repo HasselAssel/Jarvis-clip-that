@@ -3,6 +3,7 @@ use std::time::Duration;
 
 use anyhow::Result;
 use crossbeam_channel::Receiver;
+use crossbeam_channel::Sender;
 use ffmpeg_next::codec::context::Context;
 use ffmpeg_next::decoder;
 use ffmpeg_next::format::context::Input;
@@ -11,15 +12,15 @@ use ffmpeg_next::frame::Video;
 use ffmpeg_next::media::Type;
 
 pub enum PlaybackCommand {
-    Play,
-    Pause,
-    Seek(Duration)
+    Consumed(Duration),
+    Seek(Duration),
+    Close,
 }
 
 pub struct PlaybackManager {
-    playing: bool,
-    position: Duration,
     cmd_receiver: Receiver<PlaybackCommand>,
+    frame_sender: Sender<DecodedFrame>,
+    buffering: Duration,
 
     media_decoder: MediaDecoder,
 }
@@ -27,15 +28,48 @@ pub struct PlaybackManager {
 impl PlaybackManager {
     pub fn new(
         path: &str,
+        buffering: Duration,
         cmd_receiver: Receiver<PlaybackCommand>,
+        frame_sender: Sender<DecodedFrame>,
     ) -> Result<Self> {
         let media_decoder = MediaDecoder::from_file(path)?;
         Ok(Self {
-            playing: false,
-            position: Duration::ZERO,
             cmd_receiver,
+            frame_sender,
+            buffering,
             media_decoder
         })
+    }
+
+    fn start(mut self) {
+        let start = Duration::ZERO;
+        let position = Duration::ZERO;
+        while position < start + self.buffering {
+            if let Some(frame) = self.media_decoder.next_frame() {
+                let duration = match frame {
+                    DecodedFrame::Video(video) => {
+                        
+                    },
+                    DecodedFrame::Audio(audio) => {
+
+                    },
+                }
+            }
+        }
+
+        while let Ok(cmd) = self.cmd_receiver.recv() {
+            match cmd {
+                PlaybackCommand::Consumed(duration) => {
+                    
+                },
+                PlaybackCommand::Seek(duration) => {
+
+                },
+                PlaybackCommand::Close => {
+                    return;
+                },
+            }
+        }
     }
 }
 
