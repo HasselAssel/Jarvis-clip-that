@@ -1,23 +1,19 @@
 [package]
 name = "Jarvis-clip-that"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2021"
 
 [dependencies]
 tokio = { version = "1.44.2", features = ["rt", "rt-multi-thread", "macros", "sync", "time"] }
 
-ffmpeg-next = { version = "9.0.0", default-features = false, features = ["codec", "format", "software-scaling"] }
+ffmpeg-next = { version = "9.0.0", default-features = false, features = ["codec", "format", "software-scaling", "software-resampling"] }
 
 rdev = { version = "0.5.3" , features = ["serialize"]}
 
-chrono = "0.4.41"
-
-rodio = "0.20.1"
+rodio = "0.23"
 
 eframe = { version = "0.31.1", features = ["wgpu"] }
 egui-wgpu = "0.31.1"
-
-atomic_float = "1.1.0"
 
 serde = { version = "1.0", features = ["derive"] }
 toml = "0.8"
@@ -25,7 +21,6 @@ toml = "0.8"
 crossbeam-channel = "0.5.15"
 
 anyhow = "1.0"
-log = "0.4.25"
 
 [target.'cfg(windows)'.dependencies]
 windows = { version = "0.61.0", features = ["Win32_Graphics_Dxgi", "Win32_Graphics_Direct3D11", "Win32_Graphics_Direct3D", "Win32_System", "Win32_System_Threading", "Win32_Graphics_Dxgi_Common", "Win32_System_LibraryLoader", "Win32_Graphics_Gdi", "Win32_System_Memory", "Win32_System_Com", "Win32_Media", "Win32_Media_Audio", "Win32_System_Com_StructuredStorage", "Win32_System_Variant", "Win32_Security", "Win32_System_Performance", "Win32_System_Diagnostics", "Win32_System_Diagnostics_ToolHelp", "Graphics_Capture", "Graphics_DirectX_Direct3D11", "Win32_UI", "Graphics_Imaging", "Win32_UI_WindowsAndMessaging", "Win32_Storage", "Win32_Storage_Xps", "Win32_Media_KernelStreaming", "Win32_Media_Multimedia"] }

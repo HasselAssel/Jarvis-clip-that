@@ -11,9 +11,10 @@ use crate::wgpu::VideoTextureHandle;
 use crate::debug;
 
 pub struct GUI {
+    render_state: egui_wgpu::RenderState,
+    
     video_textures: Vec<(usize, VideoTextureHandle)>,
     cmd_sender: Option<mpsc::UnboundedSender<PlaybackCommand>>,
-    render_state: egui_wgpu::RenderState,
 
     playing: bool,
     seek_seconds: f64,
