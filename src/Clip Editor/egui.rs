@@ -4,17 +4,20 @@ use std::time::Duration;
 use eframe;
 use eframe::egui;
 use tokio::sync::mpsc;
+use tokio::sync::watch;
 
-use crate::playback::{PlaybackCommand, PlaybackManager};
+use crate::playback::{PlaybackCommand, PlaybackManager, PlaybackState, MediaInfo};
 use crate::wgpu::VideoTexture;
 use crate::wgpu::VideoTextureHandle;
 use crate::debug;
 
 pub struct GUI {
     render_state: egui_wgpu::RenderState,
-    
+
     video_textures: Vec<(usize, VideoTextureHandle)>,
     cmd_sender: Option<mpsc::UnboundedSender<PlaybackCommand>>,
+    playback_state: Option<watch::Receiver<PlaybackState>>,
+    media_info: Option<MediaInfo>,
 
     playing: bool,
     seek_seconds: f64,
@@ -30,6 +33,8 @@ impl GUI {
         Self {
             video_textures: Vec::new(),
             cmd_sender: None,
+            playback_state: None,
+            media_info: None,
             render_state,
             playing: false,
             seek_seconds: 0.,
@@ -54,10 +59,44 @@ impl eframe::App for GUI {
             .min_height(80.0)
             .show(ctx, |ui| {
                 ui.heading("Timeline");
-
                 ui.separator();
 
-                ui.label("Video tracks and clip information will go here.");
+                if let Some(info) = &self.media_info {
+                    egui::ScrollArea::vertical().show(ui, |ui| {
+                        for (id, _, _) in &info.video_streams {
+                            let title = info.stream_metadata
+                                .get(&id)
+                                .and_then(|metadata| metadata.get("title"))
+                                .map(String::as_str)
+                                .unwrap_or("Untitled");
+
+                            ui.horizontal(|ui| {
+                                ui.label("🎬");
+                                ui.strong(format!("Video #{id}"));
+                                ui.separator();
+                                ui.label(title);
+                            });
+                            ui.separator();
+                        }
+
+                        for (id, _, _, rate) in &info.audio_streams {
+                            let title = info.stream_metadata
+                                .get(&id)
+                                .and_then(|metadata| metadata.get("title"))
+                                .map(String::as_str)
+                                .unwrap_or("Untitled");
+
+                            ui.horizontal(|ui| {
+                                ui.label("🔊");
+                                ui.strong(format!("Audio #{id}"));
+                                ui.separator();
+                                ui.label(title);
+                                ui.label(format!("({rate} Hz)"));
+                            });
+                            ui.separator();
+                        }
+                    });
+                }
             });
 
         egui::TopBottomPanel::bottom("controls")
@@ -119,9 +158,18 @@ impl eframe::App for GUI {
                         .show_value(false),
                     );
 
+                    if let Some(state) = &self.playback_state {
+                        if !response.dragged()
+                            && !response.drag_stopped()
+                            && !response.changed() {
+                            self.seek_seconds = state.borrow().position().as_secs_f64();
+                        }
+                    }
+
                     ui.label(time_text);
 
-                    if response.drag_stopped() || (response.changed() && !response.dragged()){
+                    if response.drag_stopped()
+                        || (response.changed() && response.clicked() && !response.dragged()) {
                         if let Some(tx) = &self.cmd_sender {
                             let _ = tx.send(PlaybackCommand::Seek(
                                 Duration::from_secs_f64(self.seek_seconds),
@@ -133,15 +181,37 @@ impl eframe::App for GUI {
 
         egui::CentralPanel::default().show(ctx, |ui| {
             let available = ui.available_size();
+            let count = self.video_textures.len();
 
-            for (_, texture_handle) in &self.video_textures {
-                ui.add(
-                    egui::Image::new((
-                        texture_handle.id,
-                        ui.available_size(),
-                    )).maintain_aspect_ratio(true)
-                );
+            if count == 0 {
+                return;
             }
+
+            let columns = (count as f32).sqrt().ceil() as usize;
+            let rows = count.div_ceil(columns);
+
+            let spacing = ui.spacing().item_spacing;
+            let width = (available.x - spacing.x * (columns - 1) as f32) / columns as f32;
+            let height = (available.y - spacing.y * (rows - 1) as f32) / rows as f32;
+
+            egui::Grid::new("video_grid")
+                .spacing(spacing)
+                .show(ui, |ui| {
+                    for (i, (_, texture_handle)) in self.video_textures.iter().enumerate() {
+                        ui.add(
+                            egui::Image::new((
+                                texture_handle.id,
+                                egui::vec2(width, height),
+                            ))
+                            .fit_to_exact_size(egui::vec2(width, height))
+                            .maintain_aspect_ratio(true),
+                        );
+
+                        if (i + 1) % columns == 0 {
+                            ui.end_row();
+                        }
+                    }
+                });
         });
     }
 }
@@ -158,9 +228,11 @@ impl GUI {
                 let _ = send.send(PlaybackCommand::Close);
             }
             self.cmd_sender = Some(tx);
+            self.playback_state = Some(playback_manager.receive_playback_state.clone());
             self.playing = false;
 
             self.seek_seconds = 0.;
+            self.media_info = Some(playback_manager.info.clone());
             self.duration_seconds = playback_manager.info.duration.as_secs_f64();
 
             let textures = playback_manager.info.video_streams
@@ -179,6 +251,8 @@ impl GUI {
                 .iter()
                 .map(|(i, vt)| (*i, vt.handle()))
                 .collect();
+
+            debug!(self.video_textures.len());
 
             tokio::spawn(async move {
                 playback_manager.start(textures).await;

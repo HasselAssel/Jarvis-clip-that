@@ -51,6 +51,9 @@ pub enum PlaybackCommand {
 pub struct PlaybackManager {
     cmd_receiver: mpsc::UnboundedReceiver<PlaybackCommand>,
 
+    send_playback_state: watch::Sender<PlaybackState>,
+    pub receive_playback_state: watch::Receiver<PlaybackState>,
+
     media_decoder: MediaDecoder,
     pub info: MediaInfo,
 }
@@ -62,23 +65,24 @@ impl PlaybackManager {
     ) -> Result<Self> {
         let (media_decoder, info) = MediaDecoder::from_file(path)?;
 
-        Ok(Self {
-            cmd_receiver,
-            media_decoder,
-            info
-        })
-    }
-
-    pub async fn start(mut self, textures: Vec<(usize, VideoTexture)>) {
         let playback_state = PlaybackState {
             playing: false,
             base_position: Duration::ZERO,
             started_at: Instant::now(),
             seek_id: 0,
         };
-
         let (send_playback_state, receive_playback_state) = watch::channel(playback_state);
 
+        Ok(Self {
+            cmd_receiver,
+            send_playback_state,
+            receive_playback_state,
+            media_decoder,
+            info,
+        })
+    }
+
+    pub async fn start(mut self, textures: Vec<(usize, VideoTexture)>) {
         let video_senders = textures
             .into_iter()
             .map(|(index, texture)| {
@@ -90,7 +94,7 @@ impl PlaybackManager {
                         .iter()
                         .find(|(i, _, _)| *i == index)
                         .unwrap().2,
-                    receive_playback_state.clone(),
+                    self.receive_playback_state.clone(),
                 );
                 tokio::spawn(async move {
                     let res = handler.start().await;
@@ -111,7 +115,7 @@ impl PlaybackManager {
                 let (send, rec) = mpsc::channel(2);
                 let handler = AudioStreamHandler::new(
                     rec,
-                    receive_playback_state.clone(),
+                    self.receive_playback_state.clone(),
                     tb.clone(),
                 );
                 let rate = *rate;
@@ -127,7 +131,7 @@ impl PlaybackManager {
             })
             .collect::<HashMap<_, _>>();
 
-        send_playback_state.send_modify(|playback_state| playback_state.seek_id += 1);
+        self.send_playback_state.send_modify(|playback_state| playback_state.seek_id += 1);
 
         let mut pending_frame = None;
 
@@ -141,7 +145,7 @@ impl PlaybackManager {
                     if let Some(cmd) = cmd { //TODO: handle error!
                         match cmd {
                             PlaybackCommand::Seek(duration) => {
-                                send_playback_state.send_modify(|playback_state| {
+                                self.send_playback_state.send_modify(|playback_state| {
                                     playback_state.seek_id += 1;
                                     playback_state.base_position = duration;
                                     playback_state.started_at = Instant::now();
@@ -155,7 +159,7 @@ impl PlaybackManager {
                                 pending_frame = None;
                             },
                             PlaybackCommand::Play => {
-                                send_playback_state.send_modify(|playback_state| {
+                                self.send_playback_state.send_modify(|playback_state| {
                                     if !playback_state.playing {
                                         playback_state.playing = true;
                                         playback_state.started_at = Instant::now();
@@ -163,7 +167,7 @@ impl PlaybackManager {
                                 });
                             },
                             PlaybackCommand::Pause => {
-                                send_playback_state.send_modify(|playback_state| {
+                                self.send_playback_state.send_modify(|playback_state| {
                                     if playback_state.playing {
                                         playback_state.playing = false;
                                         playback_state.base_position += playback_state.started_at.elapsed();
@@ -184,7 +188,7 @@ impl PlaybackManager {
                                 if let Ok(permit) = sender.reserve().await {
                                     if let Some(frame) = pending_frame.take() {
                                         if let Frame::Video(video) = frame.frame {
-                                            permit.send((video, send_playback_state.borrow().seek_id));
+                                            permit.send((video, self.send_playback_state.borrow().seek_id));
                                         }
                                     }
                                 }
@@ -195,7 +199,7 @@ impl PlaybackManager {
                                 if let Ok(permit) = sender.reserve().await {
                                     if let Some(frame) = pending_frame.take() {
                                         if let Frame::Audio(audio) = frame.frame {
-                                            permit.send((audio, send_playback_state.borrow().seek_id));
+                                            permit.send((audio, self.send_playback_state.borrow().seek_id));
                                         }
                                     }
                                 }
@@ -218,9 +222,11 @@ enum Frame {
     Audio(Audio),
 }
 
+#[derive(Clone)]
 pub struct MediaInfo {
     pub video_streams: Vec<(usize, Parameters, Rational)>,
-    pub audio_streams: Vec<(usize, Parameters, Rational, u32)>,
+    pub audio_streams: Vec<(usize, Parameters, Rational, u32)>, // index, params, tb, rate
+    pub stream_metadata: HashMap<usize, HashMap<String, String>>,
 
     pub duration: Duration,
 }
@@ -243,10 +249,18 @@ impl MediaDecoder {
         let mut video_streams = Vec::new();
         let mut audio_streams = Vec::new();
 
+        let mut stream_metadata = HashMap::new();
         let mut video_decoders = HashMap::new();
         let mut audio_decoders = HashMap::new();
 
         for stream in input.streams() {
+            let metadata = stream.metadata()
+                .iter()
+                .map(|(key, value)| (key.to_string(), value.to_string()))
+                .collect();
+
+            stream_metadata.insert(stream.index(), metadata);
+
             let context = Context::from_parameters(
                 stream.parameters()
             )?;
@@ -276,6 +290,7 @@ impl MediaDecoder {
             MediaInfo {
                 video_streams,
                 audio_streams,
+                stream_metadata,
                 duration,
             }
         ))
