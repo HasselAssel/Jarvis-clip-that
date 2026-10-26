@@ -9,17 +9,17 @@ pub struct VideoConverter {
     in_dim: (u32, u32),
     in_format: Pixel,
 
-    out_dim: (u32, u32),
     out_format: Pixel,
 }
 
+unsafe impl Send for VideoConverter {}
+
 impl VideoConverter {
-    pub fn new(out_dim: (u32, u32), out_format: Pixel) -> Self {
+    pub fn new(out_format: Pixel) -> Self {        
         Self {
             scaler: None,
             in_dim: (0, 0),
             in_format: Pixel::None,
-            out_dim,
             out_format
         }
     }
@@ -34,17 +34,16 @@ impl VideoConverter {
                 in_dim.0,
                 in_dim.1,
                 self.out_format,
-                self.out_dim.0,
-                self.out_dim.1,
+                in_dim.0,
+                in_dim.1,
                 Flags::FAST_BILINEAR,
             )?);
             self.in_dim = in_dim;
             self.in_format = in_format;
         }
+
         let mut output = Video::empty();
-        let scaler = unsafe {
-            self.scaler.as_mut().unwrap_unchecked()
-        };
+        let scaler = self.scaler.as_mut().unwrap();
         scaler.run(input, &mut output)?;
 
         output.set_pts(input.pts());

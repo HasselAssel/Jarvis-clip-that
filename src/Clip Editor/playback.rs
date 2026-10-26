@@ -3,7 +3,7 @@ use std::sync::atomic::{AtomicBool, AtomicU32, AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
 
 use anyhow::Result;
-use crossbeam_channel::Receiver;
+use anyhow::bail;
 use ffmpeg_next::{decoder, Rational, Rescale};
 use ffmpeg_next::codec::context::Context;
 use ffmpeg_next::codec::Parameters;
@@ -13,8 +13,9 @@ use ffmpeg_next::frame::Audio;
 use ffmpeg_next::frame::Video;
 use ffmpeg_next::media::Type;
 use tokio::select;
-use tokio::sync::{RwLock, watch};
-use tokio::sync::mpsc::{unbounded_channel, UnboundedReceiver};
+use tokio::sync::watch;
+use tokio::sync::mpsc;
+use crate::debug;
 
 use crate::frame_converter::VideoConverter;
 use crate::wgpu::VideoTexture;
@@ -29,102 +30,155 @@ pub struct PlaybackState {
 
 impl PlaybackState {
     pub fn position(&self) -> Duration {
-        self.base_position.saturating_add(self.started_at.elapsed())
+    if self.playing {
+        self.base_position + self.started_at.elapsed()
+    } else {
+        self.base_position
     }
+}
 }
 
 pub enum PlaybackCommand {
-    Consumed(Duration),
+    Play,
+    Pause,
     Seek(Duration),
     Close,
 }
 
 pub struct PlaybackManager {
-    cmd_receiver: Receiver<PlaybackCommand>,
-
-    buffering: Duration,
+    cmd_receiver: mpsc::UnboundedReceiver<PlaybackCommand>,
 
     media_decoder: MediaDecoder,
-    info: MediaInfo,
+    pub info: MediaInfo,
 }
 
 impl PlaybackManager {
     pub fn new(
         path: &str,
-        buffering: Duration,
-        cmd_receiver: Receiver<PlaybackCommand>,
+        cmd_receiver: mpsc::UnboundedReceiver<PlaybackCommand>,
     ) -> Result<Self> {
         let (media_decoder, info) = MediaDecoder::from_file(path)?;
 
         Ok(Self {
             cmd_receiver,
-            buffering,
             media_decoder,
             info
         })
     }
 
     pub async fn start(mut self, textures: Vec<(usize, VideoTexture)>) {
-        let _playback_state = PlaybackState {
+        let playback_state = PlaybackState {
             playing: false,
             base_position: Duration::ZERO,
             started_at: Instant::now(),
             seek_id: 0,
         };
 
-        let playback_state = RwLock::new(_playback_state);
+        let (send_playback_state, receive_playback_state) = watch::channel(playback_state);
 
-        self.send_buffering_frames(self.last_decoded_pos);
+        let video_senders = textures
+            .into_iter()
+            .map(|(index, texture)| {
+                let (send, rec) = mpsc::channel(2);
+                let handler = VideoStreamHandler::new(
+                    texture,
+                    rec,
+                    self.info.video_streams
+                        .iter()
+                        .find(|(i, _, _)| *i == index)
+                        .unwrap().2,
+                    receive_playback_state.clone(),
+                );
+                tokio::spawn(async move {
+                    let res = handler.start().await;
+                    debug!(res);
+                });
+                (
+                    index,
+                    send,
+                )
+            })
+            .collect::<HashMap<_, _>>();
 
-        while let Ok(cmd) = self.cmd_receiver.recv() {
-            match cmd {
-                PlaybackCommand::Consumed(duration) => {
-                    self.send_buffering_frames(duration);
+        send_playback_state.send_modify(|playback_state| playback_state.seek_id += 1);
+
+        let mut pending_frame = None;
+
+        loop {
+            if pending_frame.is_none() {
+                pending_frame = self.media_decoder.next_frame();
+            }
+
+            select! {
+                cmd = self.cmd_receiver.recv() => {
+                    if let Some(cmd) = cmd { //TODO: handle error!
+                        match cmd {
+                            PlaybackCommand::Seek(duration) => {
+                                send_playback_state.send_modify(|playback_state| {
+                                    playback_state.seek_id += 1;
+                                    playback_state.base_position = duration;
+                                    playback_state.started_at = Instant::now();
+                                });
+                                let _ = self.media_decoder.seek(
+                                    duration
+                                        .as_micros()
+                                        .try_into()
+                                        .unwrap_or_else(|err| panic!("{} (u128) doesn't fit in i64: {}", duration.as_micros(), err))
+                                );
+                                pending_frame = None;
+                            },
+                            PlaybackCommand::Play => {
+                                send_playback_state.send_modify(|playback_state| {
+                                    if !playback_state.playing {
+                                        playback_state.playing = true;
+                                        playback_state.started_at = Instant::now();
+                                    }
+                                });
+                            },
+                            PlaybackCommand::Pause => {
+                                send_playback_state.send_modify(|playback_state| {
+                                    if playback_state.playing {
+                                        playback_state.playing = false;
+                                        playback_state.base_position += playback_state.started_at.elapsed();
+                                    }
+                                });
+                            },
+                            PlaybackCommand::Close => {
+                                return
+                            },
+                        }
+                    }
                 },
-                PlaybackCommand::Seek(duration) => {
-                    let _ = self.media_decoder.seek(
-                        duration
-                            .as_micros()
-                            .try_into()
-                            .unwrap_or_else(|err| panic!("{} (u128) doesn't fit in i64: {}", duration.as_micros(), err))
-                    );
-                    self.last_decoded_pos = duration;
-                    self.send_buffering_frames(self.last_decoded_pos);
-                },
-                PlaybackCommand::Close => {
-                    return
-                },
+                _ = async {
+                    let frame = pending_frame.as_ref().unwrap();
+                    match frame.frame {
+                        Frame::Video(_) => {
+                            if let Some(sender) = video_senders.get(&frame.stream) {
+                                if let Ok(permit) = sender.reserve().await {
+                                    if let Some(frame) = pending_frame.take() {
+                                        if let Frame::Video(video) = frame.frame {
+                                            permit.send((video, send_playback_state.borrow().seek_id));
+                                        }
+                                    }
+                                }
+                            }
+                        },
+                        Frame::Audio(_) => {
+                            /*if let Some(sender) = audio_senders.get(&frame.stream) {
+                                if let Ok(permit) = sender.reserve().await {
+                                    if let Some(frame) = pending_frame.take() {
+                                        if let Frame::Audio(audio) = frame.frame {
+                                            permit.send(audio);
+                                        }
+                                    }
+                                }
+                            }*/
+                            pending_frame.take(); // TODO!
+                        }
+                    }
+                }, if pending_frame.is_some() => {}
             }
         }
-    }
-
-    fn send_buffering_frames(&mut self, start_pos: Duration) -> Option<()> {
-        while self.last_decoded_pos < start_pos + self.buffering {
-            let (frame, tb) = self.media_decoder.next_frame()?;
-            let Some(pts) = (match frame.frame {
-                Frame::Video(video) => {
-                    let pts = video.pts();
-                    self.video_frame_sender.send((video, frame.stream)).ok()?;
-                    pts
-                },
-                Frame::Audio(audio) => {
-                    let pts = audio.pts();
-                    self.audio_frame_sender.send((audio, frame.stream)).ok()?;
-                    pts
-                },
-            }) else {
-                continue
-            };
-            let nanos = pts.rescale(tb, (1, 1_000_000_000));
-            let duration = Duration::from_nanos(
-                nanos
-                    .try_into()
-                    .unwrap_or_else(|err| panic!("{} (i64) doesn't fit in u64: {}", nanos, err))
-            );
-            self.last_decoded_pos = duration;
-        }
-
-        Some(())
     }
 }
 
@@ -133,7 +187,8 @@ struct VideoStreamHandler {
     converter: VideoConverter,
 
     buffer: VecDeque<(Video, u64)>,
-    frame_receiver: UnboundedReceiver<(Video, u64)>,
+    buffer_max: usize,
+    frame_receiver: mpsc::Receiver<(Video, u64)>,
 
     time_base: Rational,
     playback_state: watch::Receiver<PlaybackState>,
@@ -144,20 +199,22 @@ struct VideoStreamHandler {
 impl VideoStreamHandler {
     fn new(
         texture: VideoTexture,
-        frame_receiver: UnboundedReceiver<(Video, u64)>,
+        frame_receiver: mpsc::Receiver<(Video, u64)>,
         time_base: Rational,
         playback_state: watch::Receiver<PlaybackState>,
     ) -> Self {
+        let local_seek_id = playback_state.borrow().seek_id;
         Self {
-            converter: VideoConverter::new(
-                (texture.width, texture.height),
-                Pixel::RGBA,
-            ),
+            converter: VideoConverter::new(Pixel::RGBA),
             texture,
             buffer: VecDeque::new(),
+            buffer_max: (2 as i64).rescale( // TODO bad idea for buffering!
+                (1, 1),
+                time_base,
+            ) as usize,
             frame_receiver,
             time_base,
-            local_seek_id: playback_state.borrow().seek_id,
+            local_seek_id,
             playback_state,
         }
     }
@@ -182,7 +239,6 @@ impl VideoStreamHandler {
 
         if self.local_seek_id != state.seek_id {
             self.buffer.retain(|(_, id)| *id >= state.seek_id);
-            self.local_seek_id = state.seek_id;
 
             while let Some((video, _)) = self.buffer.front() {
                 let Some(pts) = self.frame_position(video) else {
@@ -197,6 +253,8 @@ impl VideoStreamHandler {
 
                 let (video, _) = self.buffer.pop_front().unwrap();
                 self.display(video)?;
+                
+                self.local_seek_id = state.seek_id;
 
                 break;
             }
@@ -251,38 +309,30 @@ impl VideoStreamHandler {
             let delay = self.next_delay(&state);
 
             select! {
-                msg = self.frame_receiver.recv() => {
+                msg = self.frame_receiver.recv(),
+                    if self.buffer.len() < self.buffer_max
+                => {
                     match msg {
                         Some((video, seek_id)) => {
-                            if seek_id == self.local_seek_id {
+                            if seek_id == self.playback_state.borrow().seek_id {
                                 let converted = self.converter.convert(&video)?;
                                 self.buffer.push_back((converted, seek_id));
                             }
                         }
-                        None => break,
+                        None => bail!("frame_receiver done!"),
                     }
                 }
 
                 changed = self.playback_state.changed() => {
                     if changed.is_err() {
-                        break;
+                        bail!("state broken, idk");
                     }
                 }
 
-                _ = async {
-                    match delay {
-                        Some(delay) => {
-                            tokio::time::sleep(delay).await;
-                        }
-                        None => {
-                            std::future::pending::<()>().await;
-                        }
-                    }
-                } => {}
+                _ = tokio::time::sleep(delay.unwrap_or(Duration::MAX)),
+                    if delay.is_some() => {}
             }
         }
-
-        Ok(())
     }
 }
 
@@ -300,6 +350,8 @@ enum Frame {
 pub struct MediaInfo {
     pub video_streams: Vec<(usize, Parameters, Rational)>,
     pub audio_streams: Vec<(usize, Parameters, Rational)>,
+
+    pub duration: Duration,
 }
 
 struct MediaDecoder {
@@ -308,12 +360,14 @@ struct MediaDecoder {
     video_decoders: HashMap<usize, decoder::Video>,
     audio_decoders: HashMap<usize, decoder::Audio>,
 
-    pending: VecDeque<(DecodedFrame, Rational)>,
+    pending: VecDeque<DecodedFrame>,
 }
 
 impl MediaDecoder {
     pub fn from_file(path: &str) -> Result<(Self, MediaInfo)> {
         let mut input = ffmpeg_next::format::input(path)?;
+
+        let duration = Duration::from_micros(input.duration() as u64);
 
         let mut video_streams = Vec::new();
         let mut audio_streams = Vec::new();
@@ -351,11 +405,12 @@ impl MediaDecoder {
             MediaInfo {
                 video_streams,
                 audio_streams,
+                duration,
             }
         ))
     }
 
-    fn next_frame(&mut self) -> Option<(DecodedFrame, Rational)> {
+    fn next_frame(&mut self) -> Option<DecodedFrame> {
         loop {
             if let Some(frame) = self.pending.pop_front() {
                 return Some(frame);
@@ -371,10 +426,10 @@ impl MediaDecoder {
 
                     let mut frame = Video::empty();
                     while decoder.receive_frame(&mut frame).is_ok() {
-                        self.pending.push_back((DecodedFrame {
+                        self.pending.push_back(DecodedFrame {
                             frame: Frame::Video(frame),
                             stream: stream.index(),
-                        }, stream.time_base()));
+                        });
                         frame = Video::empty();
                     }
                 }
@@ -384,10 +439,10 @@ impl MediaDecoder {
 
                     let mut frame = Audio::empty();
                     while decoder.receive_frame(&mut frame).is_ok() {
-                        self.pending.push_back((DecodedFrame {
+                        self.pending.push_back(DecodedFrame {
                             frame: Frame::Audio(frame),
                             stream: stream.index(),
-                        }, stream.time_base()));
+                        });
                         frame = Audio::empty();
                     }
                 }

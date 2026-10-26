@@ -2,11 +2,16 @@ use anyhow::{bail, Result};
 use eframe::egui;
 use eframe::wgpu;
 
+pub struct VideoTextureHandle {
+    pub id: egui::TextureId,
+}
+
 pub struct VideoTexture {
     texture: wgpu::Texture,
     queue: wgpu::Queue,
     context: egui::Context,
-    pub id: egui::TextureId,
+    render_state: egui_wgpu::RenderState,
+    id: egui::TextureId,
     pub width: u32,
     pub height: u32,
 }
@@ -16,9 +21,39 @@ impl VideoTexture {
         render_state: &egui_wgpu::RenderState,
         queue: wgpu::Queue,
         context: egui::Context,
-        width: u32,
-        height: u32,
     ) -> Self {
+        let (width, height) = (1, 1);
+
+        let (texture, view) = Self::create_texture(render_state, width, height);
+
+        let id = render_state.renderer.write().register_native_texture(
+            &render_state.device,
+            &view,
+            wgpu::FilterMode::Linear,
+        );
+
+        Self {
+            texture,
+            queue,
+            context,
+            render_state: render_state.clone(),
+            id,
+            width,
+            height,
+        }
+    }
+
+    pub fn handle(&self) -> VideoTextureHandle {
+        VideoTextureHandle {
+            id: self.id
+        }
+    }
+
+    fn create_texture(
+        render_state: &egui_wgpu::RenderState,
+        width: u32,
+        height: u32
+    ) -> (wgpu::Texture, wgpu::TextureView) {
         let texture = render_state.device.create_texture(
             &wgpu::TextureDescriptor {
                 label: Some("Video Texture"),
@@ -40,28 +75,34 @@ impl VideoTexture {
             &wgpu::TextureViewDescriptor::default()
         );
 
-        let id = render_state.renderer.write().register_native_texture(
-            &render_state.device,
-            &view,
-            wgpu::FilterMode::Linear,
-        );
+        (texture, view)
+    }
 
-        Self {
-            texture,
-            queue,
-            context,
-            id,
-            width,
-            height,
-        }
+    fn resize(&mut self, width: u32, height: u32) {
+        let (new_texture, new_view) = Self::create_texture(&self.render_state, width, height);
+
+        self.texture = new_texture;
+
+        self.render_state.renderer.write().update_egui_texture_from_wgpu_texture(
+            &self.render_state.device,
+            &new_view,
+            wgpu::FilterMode::Linear,
+            self.id,
+        );
+        self.width = width;
+        self.height = height;
     }
 
     pub fn update(
-        &self,
+        &mut self,
         frame: &ffmpeg_next::frame::Video,
     ) -> Result<()> {
-        if frame.width() != self.width || frame.height() != self.height || frame.format() != ffmpeg_next::format::Pixel::RGBA {
-            bail!("invalid parameters ???")
+        if frame.format() != ffmpeg_next::format::Pixel::RGBA {
+            bail!("invalid format ???, expect rgba")
+        }
+
+        if frame.width() != self.width || frame.height() != self.height {
+            self.resize(frame.width(), frame.height());
         }
 
         self.queue.write_texture(
