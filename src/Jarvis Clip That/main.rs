@@ -2,7 +2,7 @@ use std::{fs, thread};
 use std::io::Cursor;
 use std::sync::Arc;
 
-use rodio::{Decoder, Sink};
+use rodio::{Decoder, DeviceSinkBuilder, Player};
 
 use crate::config::AppConfig;
 use crate::key_listener::KeyListener;
@@ -22,8 +22,26 @@ mod timing;
 fn main() {
     ffmpeg_next::init().unwrap_or_else(|e| panic!("ffmpeg_next init failed: {e}"));
 
+    println!("Welcome to Jarvis Clip That");
+
     let config_path = "config/config.toml";
     let app_config = AppConfig::load(config_path).expect(&format!("Invalid config, check {:?}", config_path));
+
+    println!(
+        "Press {} to clip the last {} seconds!",
+        app_config.keybinds.save_clip.iter()
+            .map(|keys| format!("({})",
+                                keys.iter()
+                                    .map(|key| format!("{key:?}"))
+                                    .collect::<Vec<_>>()
+                                    .join(" + ")
+            ))
+            .collect::<Vec<_>>()
+            .join(" or "),
+        app_config.retention_secs
+    );
+
+    println!("View your saved clips in \"{}\"", app_config.output_dir);
 
     let (cmd_send, cmd_recv) = crossbeam_channel::unbounded();
     let (resp_send, resp_recv) = crossbeam_channel::unbounded();
@@ -64,16 +82,17 @@ fn main() {
                     if let Some((save_sound_buffer, save_sound_volume)) = save_sound.clone() {
                         thread::spawn(move || {
                             let source = Decoder::new(Cursor::new(save_sound_buffer))?;
-                            let (_stream, handle) = rodio::OutputStream::try_default()?;
-                            let sink = Sink::try_new(&handle)?;
-                            sink.append(source);
-                            sink.set_volume(save_sound_volume);
-                            sink.sleep_until_end();
+                            let mut stream = DeviceSinkBuilder::open_default_sink()?;
+                            stream.log_on_drop(false);
+                            let player = Player::connect_new(stream.mixer());
+                            player.append(source);
+                            player.set_volume(save_sound_volume);
+                            player.sleep_until_end();
                             Ok::<(), anyhow::Error>(())
                         });
                     }
 
-                    debug!(path);
+                    println!("Saved clip to {:?}", path);
                 }
                 Err(err) => {
                     debug!(err);

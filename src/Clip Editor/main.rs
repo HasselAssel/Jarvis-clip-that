@@ -1,11 +1,16 @@
+#![cfg_attr(
+    all(target_os = "windows", not(debug_assertions)),
+    windows_subsystem = "windows"
+)]
+
+use crate::egui::GUI;
+
 mod egui;
 mod playback;
 mod frame_converter;
 mod wgpu;
 #[path = "../macros.rs"]
 mod macros;
-
-use crate::egui::GUI;
 
 #[tokio::main]
 async fn main() {

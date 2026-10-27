@@ -203,7 +203,7 @@ impl Factory {
                 self.recorder_streams.retain(|recorder| {
                     let finished = recorder.recorder_join_handle.is_finished();
                     if finished {
-                        debug!(&recorder.name);
+                        let _ = debug!(&recorder.name);
                     }
                     !finished
                 });
@@ -272,7 +272,7 @@ impl Factory {
             }
 
             FactoryCommands::AddRecorder(config) => {
-                debug!(&config);
+                let _ = debug!(&config);
                 let moment = now().expect("no time :( for adding");
                 let res = create_start_recorder(config, self.retention_secs, moment);
                 if let Ok(recorder_stream) = res {
