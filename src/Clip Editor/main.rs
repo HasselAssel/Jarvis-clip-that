@@ -11,7 +11,7 @@ use crate::egui::GUI;
 async fn main() {
     ffmpeg_next::init().unwrap_or_else(|e| panic!("ffmpeg_next init failed: {e}"));
 
-    eframe::run_native(
+    let _ = eframe::run_native(
         "Jarvis's Clip Editor",
         eframe::NativeOptions {
             renderer: eframe::Renderer::Wgpu,

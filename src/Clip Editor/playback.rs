@@ -1,7 +1,6 @@
 use std::collections::{HashMap, VecDeque};
-use std::sync::atomic::{AtomicBool, AtomicU32, AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
-use rodio::{DeviceSinkBuilder, Player, MixerDeviceSink, Source};
+use rodio::{DeviceSinkBuilder, Player, Source};
 
 use anyhow::Result;
 use anyhow::bail;
@@ -98,7 +97,7 @@ impl PlaybackManager {
                 );
                 tokio::spawn(async move {
                     let res = handler.start().await;
-                    debug!(res);
+                    let _ = debug!(res);
                 });
                 (
                     index,
@@ -111,7 +110,7 @@ impl PlaybackManager {
 
         let audio_senders = self.info.audio_streams
             .iter()
-            .map(|(index, param, tb, rate)| {
+            .map(|(index, _param, tb, rate)| {
                 let (send, rec) = mpsc::channel(2);
                 let handler = AudioStreamHandler::new(
                     rec,
@@ -122,7 +121,7 @@ impl PlaybackManager {
                 let player = Player::connect_new(output.mixer());
                 tokio::spawn(async move {
                     let res = handler.start(player, rate).await;
-                    debug!(res);
+                    let _ = debug!(res);
                 });
                 (
                     index,
@@ -242,7 +241,7 @@ struct MediaDecoder {
 
 impl MediaDecoder {
     pub fn from_file(path: &str) -> Result<(Self, MediaInfo)> {
-        let mut input = ffmpeg_next::format::input(path)?;
+        let input = ffmpeg_next::format::input(path)?;
 
         let duration = Duration::from_micros(input.duration() as u64);
 
@@ -535,7 +534,6 @@ impl AudioStreamHandler {
         let source = AudioSource::new(
             receiver,
             1000,
-            self.playback_state.clone(),
             sample_rate,
         );
 
@@ -625,7 +623,6 @@ impl AudioStreamHandler {
                         let source = AudioSource::new(
                             new_receiver,
                             1000,
-                            self.playback_state.clone(),
                             sample_rate,
                         );
 
@@ -660,26 +657,19 @@ pub struct AudioSource {
     buffer_max: usize,
 
     sample_rate: u32,
-
-    playback_state: watch::Receiver<PlaybackState>,
-    local_seek_id: u64,
 }
 
 impl AudioSource {
     pub fn new(
         receiver: mpsc::Receiver<VecDeque<f32>>,
         buffer_max: usize,
-        playback_state: watch::Receiver<PlaybackState>,
         sample_rate: u32,
     ) -> Self {
-        let local_seek_id = playback_state.borrow().seek_id;
         Self {
             receiver,
             buffer: VecDeque::new(),
             buffer_max,
-            playback_state,
             sample_rate,
-            local_seek_id,
         }
     }
 }

@@ -1,4 +1,3 @@
-use std::collections::{HashMap, VecDeque};
 use std::time::Duration;
 
 use eframe;
@@ -117,12 +116,14 @@ impl eframe::App for GUI {
 
                     fn format_time(seconds: f64) -> String {
                         let total = seconds as u64;
+                        let millis = (seconds.fract() * 1000.0) as u64;
 
                         format!(
-                            "{:02}:{:02}:{:02}",
+                            "{:02}:{:02}:{:02}:{:03}",
                             total / 3600,
                             (total / 60) % 60,
                             total % 60,
+                            millis,
                         )
                     }
 
