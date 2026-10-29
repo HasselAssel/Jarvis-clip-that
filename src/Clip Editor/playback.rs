@@ -44,6 +44,10 @@ pub enum PlaybackCommand {
     Play,
     Pause,
     Seek(Duration),
+
+    SetStreamVolume(usize, f32),
+    SetGlobalVolume(f32),
+
     Close,
 }
 
@@ -108,12 +112,10 @@ impl PlaybackManager {
 
         let output = DeviceSinkBuilder::open_default_sink().unwrap();
 
-        let audio_senders = self.info.audio_streams
+        let audio_stream_handles = self.info.audio_streams
             .iter()
             .map(|(index, _param, tb, rate)| {
-                let (send, rec) = mpsc::channel(2);
-                let handler = AudioStreamHandler::new(
-                    rec,
+                let (handler, handle) = AudioStreamHandler::new(
                     self.receive_playback_state.clone(),
                     tb.clone(),
                 );
@@ -124,8 +126,8 @@ impl PlaybackManager {
                     let _ = debug!(res);
                 });
                 (
-                    index,
-                    send,
+                    *index,
+                    handle,
                 )
             })
             .collect::<HashMap<_, _>>();
@@ -173,6 +175,16 @@ impl PlaybackManager {
                                     }
                                 });
                             },
+                            PlaybackCommand::SetStreamVolume(stream, volume) => {
+                                if let Some(handle) = audio_stream_handles.get(&stream) {
+                                    let _ = handle.cmd_send.send(AudioStreamCmd::SetStreamVolume(volume));
+                                }
+                            },
+                            PlaybackCommand::SetGlobalVolume(volume) => {
+                                for (_, handle) in &audio_stream_handles {
+                                    let _ = handle.cmd_send.send(AudioStreamCmd::SetGlobalVolume(volume));
+                                }
+                            }
                             PlaybackCommand::Close => {
                                 return
                             },
@@ -194,8 +206,8 @@ impl PlaybackManager {
                             }
                         },
                         Frame::Audio(_) => {
-                            if let Some(sender) = audio_senders.get(&frame.stream) {
-                                if let Ok(permit) = sender.reserve().await {
+                            if let Some(handle) = audio_stream_handles.get(&frame.stream) {
+                                if let Ok(permit) = handle.frame_send.reserve().await {
                                     if let Some(frame) = pending_frame.take() {
                                         if let Frame::Audio(audio) = frame.frame {
                                             permit.send((audio, self.send_playback_state.borrow().seek_id));
@@ -506,26 +518,46 @@ impl VideoStreamHandler {
     }
 }
 
+enum AudioStreamCmd {
+    SetStreamVolume(f32),
+    SetGlobalVolume(f32),
+}
+
+struct AudioStreamHandle {
+    frame_send: mpsc::Sender<(Audio, u64)>,
+    cmd_send: mpsc::UnboundedSender<AudioStreamCmd>,
+}
+
 pub struct AudioStreamHandler {
-    receiver: mpsc::Receiver<(Audio, u64)>,
+    frame_receiver: mpsc::Receiver<(Audio, u64)>,
+    cmd_receiver: mpsc::UnboundedReceiver<AudioStreamCmd>,
     playback_state: watch::Receiver<PlaybackState>,
     converter: AudioConverter,
     time_base: Rational,
+    stream_volume: f32,
+    global_volume: f32,
 }
 
 impl AudioStreamHandler {
     pub fn new(
-        receiver: mpsc::Receiver<(Audio, u64)>,
         playback_state: watch::Receiver<PlaybackState>,
         time_base: Rational,
-    ) -> Self {
+    ) -> (Self, AudioStreamHandle) {
         let converter = AudioConverter::new();
-        Self {
-            receiver,
+        let (frame_send, frame_receiver) = mpsc::channel(2);
+        let (cmd_send, cmd_receiver) = mpsc::unbounded_channel();
+        (Self {
+            frame_receiver,
+            cmd_receiver,
             playback_state,
             converter,
             time_base,
-        }
+            stream_volume: 1.,
+            global_volume: 1.,
+        }, AudioStreamHandle {
+            frame_send,
+            cmd_send,
+        })
     }
 
     pub async fn start(mut self, player: Player, sample_rate: u32) -> Result<()> {
@@ -538,6 +570,7 @@ impl AudioStreamHandler {
         );
 
         player.pause();
+        player.set_volume(self.stream_volume * self.global_volume);
         player.append(source);
 
         let mut player_seek_id = self.playback_state.borrow().seek_id;
@@ -556,7 +589,7 @@ impl AudioStreamHandler {
                     permit.send(pending.take().unwrap());
                 },
 
-                msg = self.receiver.recv(), if pending.is_none()
+                msg = self.frame_receiver.recv(), if pending.is_none()
                 => {
                     match msg {
                         Some((audio, seek_id)) => {
@@ -604,10 +637,28 @@ impl AudioStreamHandler {
                                     pending = Some(err.into_inner());
                                 }
                             }
-                        }
+                        },
                         None => bail!("frame_receiver done!"),
                     }
-                },
+                }
+
+                cmd = self.cmd_receiver.recv() => {
+                    match cmd {
+                        Some(cmd) => {
+                            match cmd {
+                                AudioStreamCmd::SetStreamVolume(volume) => {
+                                    self.stream_volume = volume;
+                                    player.set_volume(self.stream_volume * self.global_volume);
+                                },
+                                AudioStreamCmd::SetGlobalVolume(volume) => {
+                                    self.global_volume = volume;
+                                    player.set_volume(self.stream_volume * self.global_volume);
+                                }
+                            }
+                        },
+                        None => bail!("frame_receiver done!"),
+                    }
+                }
                 
                 changed = self.playback_state.changed() => {
                     if changed.is_err() {

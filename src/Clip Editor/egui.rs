@@ -1,4 +1,5 @@
 use std::time::Duration;
+use std::collections::HashMap;
 
 use eframe;
 use eframe::egui;
@@ -18,6 +19,9 @@ pub struct GUI {
     playback_state: Option<watch::Receiver<PlaybackState>>,
     media_info: Option<MediaInfo>,
 
+    global_volume: f32,
+    stream_volumes: HashMap<usize, f32>,
+
     playing: bool,
     seek_seconds: f64,
     duration_seconds: f64,
@@ -34,6 +38,8 @@ impl GUI {
             cmd_sender: None,
             playback_state: None,
             media_info: None,
+            global_volume: 1.,
+            stream_volumes: HashMap::new(),
             render_state,
             playing: false,
             seek_seconds: 0.,
@@ -49,6 +55,16 @@ impl eframe::App for GUI {
                                         .and_then(|file| file.path.as_ref())
                                         .and_then(|path| path.to_str()) {
                 self.open_file(ctx, path);
+            }
+        });
+
+        egui::TopBottomPanel::top("toolbar").show(ctx, |ui| {
+            if ui.button("Open File").clicked() {
+                if let Some(path) = rfd::FileDialog::new().pick_file() {
+                    if let Some(path) = path.to_str() {
+                        self.open_file(ctx, path);
+                    }
+                }
             }
         });
 
@@ -91,6 +107,20 @@ impl eframe::App for GUI {
                                 ui.separator();
                                 ui.label(title);
                                 ui.label(format!("({rate} Hz)"));
+
+                                let volume = self.stream_volumes.entry(*id).or_insert(1.);
+
+                                let response = ui.add(
+                                    egui::Slider::new(volume, 0.0..=2.0)
+                                        .text("Volume")
+                                        .fixed_decimals(2)
+                                );
+
+                                if response.changed() {
+                                    if let Some(tx) = &self.cmd_sender {
+                                        let _ = tx.send(PlaybackCommand::SetStreamVolume(*id, *volume));
+                                    }
+                                }
                             });
                             ui.separator();
                         }
@@ -111,6 +141,18 @@ impl eframe::App for GUI {
                             } else {
                                 PlaybackCommand::Pause
                             });
+                        }
+                    }
+
+                    let volume_response = ui.add(
+                        egui::Slider::new(&mut self.global_volume, 0.0..=2.0)
+                            .text("Volume")
+                            .fixed_decimals(2)
+                    );
+
+                    if volume_response.changed() {
+                        if let Some(tx) = &self.cmd_sender {
+                            let _ = tx.send(PlaybackCommand::SetGlobalVolume(self.global_volume));
                         }
                     }
 
@@ -159,10 +201,10 @@ impl eframe::App for GUI {
                         .show_value(false),
                     );
 
-                    if let Some(state) = &self.playback_state {
-                        if !response.dragged()
-                            && !response.drag_stopped()
-                            && !response.changed() {
+                    if !response.dragged()
+                        && !response.drag_stopped()
+                        && !response.changed() {
+                        if let Some(state) = &self.playback_state {
                             self.seek_seconds = state.borrow().position().as_secs_f64();
                         }
                     }
@@ -228,6 +270,7 @@ impl GUI {
             if let Some(send) = &self.cmd_sender {
                 let _ = send.send(PlaybackCommand::Close);
             }
+            self.stream_volumes.clear();
             self.cmd_sender = Some(tx);
             self.playback_state = Some(playback_manager.receive_playback_state.clone());
             self.playing = false;
