@@ -46,7 +46,9 @@ pub enum PlaybackCommand {
     Seek(Duration),
 
     SetStreamVolume(usize, f32),
+    MuteStream(usize, bool),
     SetGlobalVolume(f32),
+    MuteGlobal(bool),
 
     Close,
 }
@@ -110,7 +112,8 @@ impl PlaybackManager {
             })
             .collect::<HashMap<_, _>>();
 
-        let output = DeviceSinkBuilder::open_default_sink().unwrap();
+        let mut output = DeviceSinkBuilder::open_default_sink().unwrap();
+        output.log_on_drop(false);
 
         let audio_stream_handles = self.info.audio_streams
             .iter()
@@ -184,7 +187,17 @@ impl PlaybackManager {
                                 for (_, handle) in &audio_stream_handles {
                                     let _ = handle.cmd_send.send(AudioStreamCmd::SetGlobalVolume(volume));
                                 }
-                            }
+                            },
+                            PlaybackCommand::MuteStream(stream, muted) => {
+                                if let Some(handle) = audio_stream_handles.get(&stream) {
+                                    let _ = handle.cmd_send.send(AudioStreamCmd::MuteStream(muted));
+                                }
+                            },
+                            PlaybackCommand::MuteGlobal(muted) => {
+                                for (_, handle) in &audio_stream_handles {
+                                    let _ = handle.cmd_send.send(AudioStreamCmd::MuteGlobal(muted));
+                                }
+                            },
                             PlaybackCommand::Close => {
                                 return
                             },
@@ -521,6 +534,8 @@ impl VideoStreamHandler {
 enum AudioStreamCmd {
     SetStreamVolume(f32),
     SetGlobalVolume(f32),
+    MuteStream(bool),
+    MuteGlobal(bool),
 }
 
 struct AudioStreamHandle {
@@ -536,10 +551,12 @@ pub struct AudioStreamHandler {
     time_base: Rational,
     stream_volume: f32,
     global_volume: f32,
+    stream_muted: bool,
+    global_muted: bool,
 }
 
 impl AudioStreamHandler {
-    pub fn new(
+    fn new(
         playback_state: watch::Receiver<PlaybackState>,
         time_base: Rational,
     ) -> (Self, AudioStreamHandle) {
@@ -554,6 +571,8 @@ impl AudioStreamHandler {
             time_base,
             stream_volume: 1.,
             global_volume: 1.,
+            stream_muted: false,
+            global_muted: false,
         }, AudioStreamHandle {
             frame_send,
             cmd_send,
@@ -646,13 +665,21 @@ impl AudioStreamHandler {
                     match cmd {
                         Some(cmd) => {
                             match cmd {
-                                AudioStreamCmd::SetStreamVolume(volume) => {
-                                    self.stream_volume = volume;
-                                    player.set_volume(self.stream_volume * self.global_volume);
-                                },
-                                AudioStreamCmd::SetGlobalVolume(volume) => {
-                                    self.global_volume = volume;
-                                    player.set_volume(self.stream_volume * self.global_volume);
+                                AudioStreamCmd::SetStreamVolume(_) |
+                                AudioStreamCmd::SetGlobalVolume(_) |
+                                AudioStreamCmd::MuteStream(_) |
+                                AudioStreamCmd::MuteGlobal(_) => {
+                                    match cmd {
+                                        AudioStreamCmd::SetStreamVolume(volume) => self.stream_volume = volume,
+                                        AudioStreamCmd::SetGlobalVolume(volume) => self.global_volume = volume,
+                                        AudioStreamCmd::MuteStream(muted) => self.stream_muted = muted,
+                                        AudioStreamCmd::MuteGlobal(muted) => self.global_muted = muted,
+                                    }
+                                    if self.stream_muted || self.global_muted {
+                                        player.set_volume(0.);
+                                    } else {
+                                        player.set_volume(self.stream_volume * self.global_volume);
+                                    }
                                 }
                             }
                         },

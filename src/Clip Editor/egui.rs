@@ -22,6 +22,9 @@ pub struct GUI {
     global_volume: f32,
     stream_volumes: HashMap<usize, f32>,
 
+    global_muted: bool,
+    stream_muted: HashMap<usize, bool>,
+
     playing: bool,
     seek_seconds: f64,
     duration_seconds: f64,
@@ -40,6 +43,8 @@ impl GUI {
             media_info: None,
             global_volume: 1.,
             stream_volumes: HashMap::new(),
+            global_muted: false,
+            stream_muted: HashMap::new(),
             render_state,
             playing: false,
             seek_seconds: 0.,
@@ -102,23 +107,33 @@ impl eframe::App for GUI {
                                 .unwrap_or("Untitled");
 
                             ui.horizontal(|ui| {
-                                ui.label("🔊");
+                                ui.label("🔈");
                                 ui.strong(format!("Audio #{id}"));
                                 ui.separator();
                                 ui.label(title);
                                 ui.label(format!("({rate} Hz)"));
 
                                 let volume = self.stream_volumes.entry(*id).or_insert(1.);
-
                                 let response = ui.add(
-                                    egui::Slider::new(volume, 0.0..=2.0)
+                                    egui::Slider::new(volume, 0.0..=10.0)
                                         .text("Volume")
+                                        .logarithmic(true)
+                                        .smallest_positive(0.01)
                                         .fixed_decimals(2)
                                 );
 
                                 if response.changed() {
                                     if let Some(tx) = &self.cmd_sender {
                                         let _ = tx.send(PlaybackCommand::SetStreamVolume(*id, *volume));
+                                    }
+                                }
+
+                                let muted = self.stream_muted.entry(*id).or_insert(false);
+                                if ui.button(if *muted {"🔇"} else {"🔊"}).clicked() {
+                                    *muted = !*muted;
+
+                                    if let Some(tx) = &self.cmd_sender {
+                                        let _ = tx.send(PlaybackCommand::MuteStream(*id, *muted));
                                     }
                                 }
                             });
@@ -145,14 +160,24 @@ impl eframe::App for GUI {
                     }
 
                     let volume_response = ui.add(
-                        egui::Slider::new(&mut self.global_volume, 0.0..=2.0)
+                        egui::Slider::new(&mut self.global_volume, 0.0..=10.0)
                             .text("Volume")
+                            .logarithmic(true)
+                            .smallest_positive(0.01)
                             .fixed_decimals(2)
                     );
 
                     if volume_response.changed() {
                         if let Some(tx) = &self.cmd_sender {
                             let _ = tx.send(PlaybackCommand::SetGlobalVolume(self.global_volume));
+                        }
+                    }
+
+                    if ui.button(if self.global_muted {"🔇"} else {"🔊"}).clicked() {
+                        self.global_muted = !self.global_muted;
+
+                        if let Some(tx) = &self.cmd_sender {
+                            let _ = tx.send(PlaybackCommand::MuteGlobal(self.global_muted));
                         }
                     }
 
