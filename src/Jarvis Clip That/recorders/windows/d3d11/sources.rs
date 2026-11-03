@@ -7,6 +7,7 @@ use windows::Win32::Graphics::Dxgi::IDXGIDevice;
 use windows::Win32::Graphics::Dxgi::IDXGIOutput;
 use windows::Win32::Graphics::Dxgi::IDXGIOutput1;
 use windows::Win32::Graphics::Dxgi::IDXGIOutputDuplication;
+use windows::Win32::Graphics::Dxgi::DXGI_OUTDUPL_DESC;
 use windows::Win32::Graphics::Dxgi::IDXGIResource;
 use windows_core::Interface;
 
@@ -46,6 +47,19 @@ impl SourceD3d11 {
             frame_info,
         })
     }
+
+    pub fn get_dims(&self) -> (u32, u32) {
+        let mut desc = DXGI_OUTDUPL_DESC::default();
+
+        unsafe {
+            self.duplication.GetDesc(&mut desc);
+        }
+
+        let width = desc.ModeDesc.Width;
+        let height = desc.ModeDesc.Height;
+
+        (width, height)
+    }
 }
 
 impl Source for SourceD3d11 {
@@ -56,7 +70,9 @@ impl Source for SourceD3d11 {
         &mut self,
         _: &Self::Env<'_>
     ) -> Result<Self::Output<'_>> {
-        // TODO: Fix First Frame always being Green (for some reason the first duplication.AcquireNextFrame call generates no IDXGIResource)
+        //TODO!!! rebuild the duplication and etc, when DXGI_ERROR_ACCESS_LOST as the user might change screen resolution!
+
+        // for some reason the first duplication.AcquireNextFrame call generates no IDXGIResource
 
         self.resource = None;
 

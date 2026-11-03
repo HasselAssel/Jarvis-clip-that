@@ -46,9 +46,10 @@ fn create_start_recorder(config: Config, retention_secs: i64, creation_moment: M
                         monitor,
                         &env
                     )?;
+                    let input_dims = source.get_dims();
                     let converter = BgraToNv12Converter::new(
-                        (2560, 1440), // TODO!!!
-                        (2560, 1440), // TODO!!!
+                        input_dims,
+                        input_dims,
                         &env
                     )?;
                     let codec = match video_config.codec {
@@ -57,7 +58,7 @@ fn create_start_recorder(config: Config, retention_secs: i64, creation_moment: M
                     let ctx = codec::context::Context::new_with_codec(codec);
                     let enc = ctx.encoder().video()?;
                     let encoder = EncoderD3D11::new(
-                        (2560, 1440), // TODO!!!
+                        input_dims,
                         video_config.fps,
                         enc,
                         codec,

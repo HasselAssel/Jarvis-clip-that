@@ -146,12 +146,10 @@ pub fn create_av_frame(
     width: i32,
     height: i32,
     hw_frame_ctx: *mut AVBufferRef,
-//) -> Result<*mut AVFrame> {
 ) -> Result<Frame> {
     let mut frame;
     let av_frame;
     unsafe {
-        //av_frame = av_frame_alloc();
         frame = Frame::empty();
         av_frame = frame.as_mut_ptr();
 
@@ -178,17 +176,29 @@ fn insert_texture_into_frame(
     av_frame: *mut AVFrame,
     texture: &ID3D11Texture2D,
 ) -> Result<()> {
+    unsafe extern "C" texture_free(opaque: *mut c_void, _data: *mut u8) {
+        // opague is Boxed ID3D11Texture2D
+        unsafe {
+            drop(Box::from_raw(opague as *mut ID3D11Texture2D));
+        }
+    }
+
+    let buffers_texture_rc = Box::into_raw(Box::new(texture.clone()));
+
     let texture_buffer = unsafe {
         av_buffer_create(
             texture.as_raw() as _,
             size_of::<*mut ID3D11Texture2D>(),
-            None, //Some(Self::buffer_free),
-            null_mut(),
+            Some(texture_free),
+            buffers_texture_rc as _,
             0,
         )
     };
     if texture_buffer.is_null() {
-        bail!("cant create buffer");
+        unsafe {
+            drop(Box::from_raw(buffers_texture_rc));
+        }
+        bail!("can't create buffer");
     }
     unsafe {
         (*av_frame).data[0] = texture.as_raw() as _;
