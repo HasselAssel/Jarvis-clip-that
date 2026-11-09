@@ -7,9 +7,11 @@ use rodio::{Decoder, DeviceSinkBuilder, Player};
 use crate::config::AppConfig;
 use crate::key_listener::KeyListener;
 use crate::recorders::factory::{Factory, FactoryCommands, FactoryResponse};
+use crate::save::Saver;
 #[cfg(target_os = "windows")]
 use crate::recorders::windows::wasapi::process_watcher::WasApiProcessWatcher;
-use crate::save::Saver;
+#[cfg(target_os = "linux")]
+use crate::recorders::linux::test::test;
 
 mod recorders;
 #[path = "../macros.rs"]
@@ -21,6 +23,12 @@ mod timing;
 
 fn main() {
     ffmpeg_next::init().unwrap_or_else(|e| panic!("ffmpeg_next init failed: {e}"));
+
+    //crate::recorders::linux::test::test();
+    let hi = crate::recorders::linux::xdg::env::EnvXdg::new();
+
+    println!("done");
+    thread::park();
 
     println!("Welcome to Jarvis Clip That");
 
