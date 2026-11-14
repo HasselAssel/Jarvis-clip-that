@@ -1,7 +1,19 @@
 # Jarvis-clip-that
 
-Jarvis-clip-that is a desktop clipping tool, with the main goal of separating the different audio tracks on the desktop.
-The resulting clip file contains multiple audio tracks so one can cut out unwanted noise for maximum larp.
+Jarvis-clip-that is a desktop clipping tool, with the main goal of separating the different audio tracks on the desktop.  
+The resulting clip file contains seperated audio (and video) tracks so one can cut out unwanted noise for maximum larp.
+
+On Windows, set the `FFMPEG_DIR` environment variable to the directory containing your FFmpeg build.  
+On Linux, `pkg-config` usually handles the FFmpeg linking.
+
+There are two cargo bins:  
+`jarvis-clip-that`  
+`clip-editor`
+
+Windows Powershell Example: 
+```powershell
+$env:FFMPEG_DIR = "C:\ffmpeg"; cargo build --release --bin jarvis-clip-that
+```
 
 Currently Supported:
 - Windows:
@@ -12,10 +24,10 @@ Currently Supported:
   - D3D11 Desktop Duplication
 - Linux:
   - in development :(
-- Minimal clip "editor" to edit and export clips:
+- Minimal clip editor to edit and export clips:
   - in development :(
 
-The config.toml file can be specified with `--config path/to/config.toml`, the default is `config/config.toml`.
+The config.toml file can be specified with `--config path/to/config.toml`, the default path is `config/config.toml`.
 
 Example `config.toml`:
 ```toml file="config.toml"
