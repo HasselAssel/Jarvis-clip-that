@@ -1,15 +1,15 @@
-use std::time::Duration;
 use std::collections::HashMap;
+use std::time::Duration;
 
 use eframe;
 use eframe::egui;
 use tokio::sync::mpsc;
 use tokio::sync::watch;
 
-use crate::playback::{PlaybackCommand, PlaybackManager, PlaybackState, MediaInfo};
+use crate::debug;
+use crate::playback::{MediaInfo, PlaybackCommand, PlaybackManager, PlaybackState};
 use crate::wgpu::VideoTexture;
 use crate::wgpu::VideoTextureHandle;
-use crate::debug;
 
 pub struct GUI {
     render_state: egui_wgpu::RenderState,
@@ -113,29 +113,34 @@ impl eframe::App for GUI {
                                 ui.label(title);
                                 ui.label(format!("({rate} Hz)"));
 
-                                let volume = self.stream_volumes.entry(*id).or_insert(1.);
-                                let response = ui.add(
-                                    egui::Slider::new(volume, 0.0..=10.0)
-                                        .text("Volume")
-                                        .logarithmic(true)
-                                        .smallest_positive(0.01)
-                                        .fixed_decimals(2)
+                                ui.with_layout(
+                                    egui::Layout::right_to_left(egui::Align::Center),
+                                    |ui| {
+                                        let volume = self.stream_volumes.entry(*id).or_insert(1.);
+                                        let response = ui.add(
+                                            egui::Slider::new(volume, 0.0..=10.0)
+                                                .text("Volume")
+                                                .logarithmic(true)
+                                                .smallest_positive(0.01)
+                                                .fixed_decimals(2)
+                                        );
+
+                                        if response.changed() {
+                                            if let Some(tx) = &self.cmd_sender {
+                                                let _ = tx.send(PlaybackCommand::SetStreamVolume(*id, *volume));
+                                            }
+                                        }
+
+                                        let muted = self.stream_muted.entry(*id).or_insert(false);
+                                        if ui.button(if *muted {"🔇"} else {"🔊"}).clicked() {
+                                            *muted = !*muted;
+
+                                            if let Some(tx) = &self.cmd_sender {
+                                                let _ = tx.send(PlaybackCommand::MuteStream(*id, *muted));
+                                            }
+                                        }
+                                    },
                                 );
-
-                                if response.changed() {
-                                    if let Some(tx) = &self.cmd_sender {
-                                        let _ = tx.send(PlaybackCommand::SetStreamVolume(*id, *volume));
-                                    }
-                                }
-
-                                let muted = self.stream_muted.entry(*id).or_insert(false);
-                                if ui.button(if *muted {"🔇"} else {"🔊"}).clicked() {
-                                    *muted = !*muted;
-
-                                    if let Some(tx) = &self.cmd_sender {
-                                        let _ = tx.send(PlaybackCommand::MuteStream(*id, *muted));
-                                    }
-                                }
                             });
                             ui.separator();
                         }
@@ -147,6 +152,9 @@ impl eframe::App for GUI {
             .resizable(false)
             .show(ctx, |ui| {
                 ui.horizontal(|ui| {
+                    let volume_width = 260.0;
+                    let spacing = ui.spacing().item_spacing.x;
+
                     if ui.button(if self.playing { "⏸" } else { "▶" }).clicked() {
                         self.playing = !self.playing;
 
@@ -156,28 +164,6 @@ impl eframe::App for GUI {
                             } else {
                                 PlaybackCommand::Pause
                             });
-                        }
-                    }
-
-                    let volume_response = ui.add(
-                        egui::Slider::new(&mut self.global_volume, 0.0..=10.0)
-                            .text("Volume")
-                            .logarithmic(true)
-                            .smallest_positive(0.01)
-                            .fixed_decimals(2)
-                    );
-
-                    if volume_response.changed() {
-                        if let Some(tx) = &self.cmd_sender {
-                            let _ = tx.send(PlaybackCommand::SetGlobalVolume(self.global_volume));
-                        }
-                    }
-
-                    if ui.button(if self.global_muted {"🔇"} else {"🔊"}).clicked() {
-                        self.global_muted = !self.global_muted;
-
-                        if let Some(tx) = &self.cmd_sender {
-                            let _ = tx.send(PlaybackCommand::MuteGlobal(self.global_muted));
                         }
                     }
 
@@ -210,40 +196,83 @@ impl eframe::App for GUI {
 
                     let slider_width = (
                         ui.available_width()
-                        - label_width
-                        - ui.spacing().item_spacing.x
-                    ).max(0.0);
+                            - label_width
+                            - volume_width
+                            - spacing * 3.0
+                    )
+                        .max(0.0);
 
-                    ui.spacing_mut().slider_width = slider_width;
+                    let response = ui.scope(|ui| {
+                        ui.spacing_mut().slider_width = slider_width;
 
-                    let response = ui.add(
-                        egui::Slider::new(
-                            &mut self.seek_seconds,
-                            0.0..=self.duration_seconds.max(0.0),
+                        ui.add(
+                            egui::Slider::new(
+                                &mut self.seek_seconds,
+                                0.0..=self.duration_seconds.max(0.0),
+                            )
+                                .smart_aim(false)
+                                .step_by(0.01)
+                                .show_value(false),
                         )
-                        .smart_aim(false)
-                        .step_by(0.01)
-                        .show_value(false),
-                    );
+                    }).inner;
 
                     if !response.dragged()
                         && !response.drag_stopped()
-                        && !response.changed() {
+                        && !response.changed()
+                    {
                         if let Some(state) = &self.playback_state {
                             self.seek_seconds = state.borrow().position().as_secs_f64();
                         }
                     }
 
-                    ui.label(time_text);
-
                     if response.drag_stopped()
-                        || (response.changed() && response.clicked() && !response.dragged()) {
+                        || (response.changed() && response.clicked() && !response.dragged())
+                    {
                         if let Some(tx) = &self.cmd_sender {
                             let _ = tx.send(PlaybackCommand::Seek(
                                 Duration::from_secs_f64(self.seek_seconds),
                             ));
                         }
                     }
+
+                    ui.label(time_text);
+
+                    ui.allocate_ui_with_layout(
+                        egui::vec2(volume_width, ui.spacing().interact_size.y),
+                        egui::Layout::right_to_left(egui::Align::Center),
+                        |ui| {
+                            if ui
+                                .button(if self.global_muted { "🔇" } else { "🔊" })
+                                .clicked()
+                            {
+                                self.global_muted = !self.global_muted;
+
+                                if let Some(tx) = &self.cmd_sender {
+                                    let _ = tx.send(PlaybackCommand::MuteGlobal(
+                                        self.global_muted,
+                                    ));
+                                }
+                            }
+
+                            ui.spacing_mut().slider_width = 110.0;
+
+                            let volume_response = ui.add(
+                                egui::Slider::new(&mut self.global_volume, 0.0..=10.0)
+                                    .logarithmic(true)
+                                    .smallest_positive(0.01)
+                                    .fixed_decimals(2),
+                            );
+                            ui.label("Volume");
+
+                            if volume_response.changed() {
+                                if let Some(tx) = &self.cmd_sender {
+                                    let _ = tx.send(PlaybackCommand::SetGlobalVolume(
+                                        self.global_volume,
+                                    ));
+                                }
+                            }
+                        },
+                    );
                 });
             });
 

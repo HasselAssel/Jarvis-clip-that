@@ -1,17 +1,19 @@
 use std::{fs, thread};
 use std::io::Cursor;
+use std::path::PathBuf;
 use std::sync::Arc;
 
+use clap::Parser;
 use rodio::{Decoder, DeviceSinkBuilder, Player};
 
 use crate::config::AppConfig;
 use crate::key_listener::KeyListener;
 use crate::recorders::factory::{Factory, FactoryCommands, FactoryResponse};
-use crate::save::Saver;
-#[cfg(target_os = "windows")]
-use crate::recorders::windows::wasapi::process_watcher::WasApiProcessWatcher;
 #[cfg(target_os = "linux")]
 use crate::recorders::linux::test::test;
+#[cfg(target_os = "windows")]
+use crate::recorders::windows::wasapi::process_watcher::WasApiProcessWatcher;
+use crate::save::Saver;
 
 mod recorders;
 #[path = "../macros.rs"]
@@ -21,19 +23,21 @@ mod key_listener;
 mod config;
 mod timing;
 
+
+#[derive(Parser)]
+struct Args {
+    #[arg(long, default_value = "config/config.toml")]
+    config: PathBuf,
+}
+
 fn main() {
     ffmpeg_next::init().unwrap_or_else(|e| panic!("ffmpeg_next init failed: {e}"));
 
-    //crate::recorders::linux::test::test();
-    let hi = crate::recorders::linux::xdg::env::EnvXdg::new();
-
-    println!("done");
-    thread::park();
-
     println!("Welcome to Jarvis Clip That");
 
-    let config_path = "config/config.toml";
-    let app_config = AppConfig::load(config_path).expect(&format!("Invalid config, check {:?}", config_path));
+    let args = Args::parse();
+
+    let app_config = AppConfig::load(&args.config).expect(&format!("Invalid config, check {:?}", args.config));
 
     println!(
         "Press {} to clip the last {} seconds!",

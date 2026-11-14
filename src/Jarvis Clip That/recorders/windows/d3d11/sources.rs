@@ -1,21 +1,23 @@
-use anyhow::anyhow;
+use anyhow::Context;
 use anyhow::Result;
 use windows::Win32::Graphics::Direct3D11::ID3D11Texture2D;
-use windows::Win32::Graphics::Dxgi::DXGI_OUTDUPL_FRAME_INFO;
+use windows::Win32::Graphics::Dxgi::{DXGI_ERROR_ACCESS_LOST, DXGI_ERROR_WAIT_TIMEOUT, DXGI_OUTDUPL_FRAME_INFO};
 use windows::Win32::Graphics::Dxgi::IDXGIAdapter;
 use windows::Win32::Graphics::Dxgi::IDXGIDevice;
 use windows::Win32::Graphics::Dxgi::IDXGIOutput;
 use windows::Win32::Graphics::Dxgi::IDXGIOutput1;
 use windows::Win32::Graphics::Dxgi::IDXGIOutputDuplication;
-use windows::Win32::Graphics::Dxgi::DXGI_OUTDUPL_DESC;
 use windows::Win32::Graphics::Dxgi::IDXGIResource;
 use windows_core::Interface;
 
-use crate::recorders::windows::d3d11::env::EnvD3D11;
+use crate::debug;
 use crate::recorders::traits::Source;
+use crate::recorders::windows::d3d11::env::EnvD3D11;
 
 pub struct SourceD3d11 {
-    duplication: IDXGIOutputDuplication,
+    duplication: Option<IDXGIOutputDuplication>,
+
+    output1 : IDXGIOutput1,
 
     resource: Option<IDXGIResource>,
     frame_info: DXGI_OUTDUPL_FRAME_INFO,
@@ -25,7 +27,7 @@ impl SourceD3d11 {
     pub fn new(monitor: u32, env: &<Self  as Source>::Env<'_>) -> Result<Self> {
         let adapter: IDXGIAdapter;
         let output: IDXGIOutput;
-        let duplication: IDXGIOutputDuplication;
+        let duplication: Option<IDXGIOutputDuplication>;
 
         let dxgi_device: IDXGIDevice = env.device.cast()?;
         unsafe {
@@ -34,7 +36,7 @@ impl SourceD3d11 {
         }
         let output1: IDXGIOutput1 = output.cast()?;
         unsafe {
-            duplication = output1.DuplicateOutput(&env.device)?;
+            duplication = output1.DuplicateOutput(&env.device).ok();
         }
 
         let resource = None;
@@ -42,23 +44,22 @@ impl SourceD3d11 {
 
         Ok(Self {
             duplication,
+            output1,
 
             resource,
             frame_info,
         })
     }
 
-    pub fn get_dims(&self) -> (u32, u32) {
-        let mut desc = DXGI_OUTDUPL_DESC::default();
-
-        unsafe {
-            self.duplication.GetDesc(&mut desc);
-        }
+    pub fn get_dims(&self) -> Option<(u32, u32)> {
+        let desc = unsafe {
+            self.duplication.as_ref()?.GetDesc()
+        };
 
         let width = desc.ModeDesc.Width;
         let height = desc.ModeDesc.Height;
 
-        (width, height)
+        Some((width, height))
     }
 }
 
@@ -68,33 +69,44 @@ impl Source for SourceD3d11 {
 
     fn next_frame(
         &mut self,
-        _: &Self::Env<'_>
+        env: &Self::Env<'_>
     ) -> Result<Self::Output<'_>> {
-        //TODO!!! rebuild the duplication and etc, when DXGI_ERROR_ACCESS_LOST as the user might change screen resolution!
-
         // for some reason the first duplication.AcquireNextFrame call generates no IDXGIResource
 
         self.resource = None;
 
         let res = unsafe {
-            self.duplication.AcquireNextFrame(
+            self.duplication.as_ref().with_context(|| debug!("no duplication"))?.AcquireNextFrame(
                 0,
                 &mut self.frame_info,
                 &mut self.resource,
             )
         };
 
-        if res.is_err() {
+        if let Err(err) = res {
+            match err.code() {
+                DXGI_ERROR_ACCESS_LOST => {
+                    debug!("new duplication");
+                    self.duplication = None;
+                    self.duplication = Some(unsafe {
+                        self.output1.DuplicateOutput(&env.device)?
+                    });
+                }
+                DXGI_ERROR_WAIT_TIMEOUT => {}
+                other => {
+                    let _ = debug!(other);
+                }
+            }
             return Ok(None)
         }
 
         let mut acquired_frame = AcquiredFrame {
-            _duplication: &self.duplication,
+            _duplication: self.duplication.as_ref().with_context(|| debug!("no duplication"))?,
             texture: None,
             frame_info: &self.frame_info
         };
 
-        let dxgi_resource = self.resource.as_ref().ok_or_else(|| anyhow!("no dxgi_resource!"))?;
+        let dxgi_resource = self.resource.as_ref().with_context(|| "no dxgi_resource!")?;
 
         if self.frame_info.AccumulatedFrames != 0 {
             acquired_frame.texture = Some(dxgi_resource.cast()?);

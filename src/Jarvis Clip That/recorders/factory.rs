@@ -1,6 +1,6 @@
 use std::time::Duration;
 
-use anyhow::{anyhow, Result};
+use anyhow::{anyhow, Context, Result};
 use crossbeam_channel::{Receiver, Select, Sender};
 use ffmpeg_next::{codec, Packet, Rational};
 use ffmpeg_next::encoder::find_by_name;
@@ -46,10 +46,10 @@ fn create_start_recorder(config: Config, retention_secs: i64, creation_moment: M
                         monitor,
                         &env
                     )?;
-                    let input_dims = source.get_dims();
+                    let input_dims = source.get_dims().context("no duplication in the source")?;
                     let converter = BgraToNv12Converter::new(
                         input_dims,
-                        input_dims,
+                        (video_config.width, video_config.height),
                         &env
                     )?;
                     let codec = match video_config.codec {
@@ -58,7 +58,7 @@ fn create_start_recorder(config: Config, retention_secs: i64, creation_moment: M
                     let ctx = codec::context::Context::new_with_codec(codec);
                     let enc = ctx.encoder().video()?;
                     let encoder = EncoderD3D11::new(
-                        input_dims,
+                        (video_config.width, video_config.height),
                         video_config.fps,
                         enc,
                         codec,

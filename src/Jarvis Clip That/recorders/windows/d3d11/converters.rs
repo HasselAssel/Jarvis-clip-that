@@ -60,7 +60,7 @@ impl BgraToNv12Converter {
                 .context("failed to query BGRA video-processor support")?
         };
         if bgra_support & D3D11_VIDEO_PROCESSOR_FORMAT_SUPPORT_INPUT.0 as u32 == 0 {
-            bail!("BGRA is not supported as video-processor input");
+            bail!("BGRA is not supported as video-processor input :(");
         }
 
         let nv12_support = unsafe {
@@ -69,7 +69,7 @@ impl BgraToNv12Converter {
                 .context("failed to query NV12 video-processor support")?
         };
         if nv12_support & D3D11_VIDEO_PROCESSOR_FORMAT_SUPPORT_OUTPUT.0 as u32 == 0 {
-            bail!("NV12 is not supported as video-processor output");
+            bail!("NV12 is not supported as video-processor output :(");
         }
 
         let processor: ID3D11VideoProcessor = unsafe {
@@ -79,15 +79,15 @@ impl BgraToNv12Converter {
         let src_rect = RECT {
             left: 0,
             top: 0,
-            right: i32::try_from(input_width).with_context(|| format!("input_width exceeds i32::MAX: {input_width}"))?,
-            bottom: i32::try_from(input_height).with_context(|| format!("input_height exceeds i32::MAX: {input_height}"))?,
+            right: i32::try_from(input_width).with_context(|| format!("input_width can't be i32: {input_width}"))?,
+            bottom: i32::try_from(input_height).with_context(|| format!("input_height can't be i32: {input_height}"))?,
         };
 
         let dst_rect = RECT {
             left: 0,
             top: 0,
-            right: i32::try_from(output_width).with_context(|| format!("output_width exceeds i32::MAX: {output_width}"))?,
-            bottom: i32::try_from(output_height).with_context(|| format!("output_height exceeds i32::MAX: {output_height}"))?,
+            right: i32::try_from(output_width).with_context(|| format!("output_width can't be i32: {output_width}"))?,
+            bottom: i32::try_from(output_height).with_context(|| format!("output_height can't be i32: {output_height}"))?,
         };
 
         unsafe {
@@ -175,7 +175,7 @@ impl Converter for BgraToNv12Converter {
             bail!("expected DXGI_FORMAT_B8G8R8A8_UNORM, got {:?}", input_desc.Format);
         }
 
-        if input_desc.Width != self.input_width || input_desc.Height != self.input_height {
+        if input_desc.Width != self.input_width || input_desc.Height != self.input_height { // todo: resolution change for example if monitor changes i think?
             bail!(
                 "input resolution changed: converter expects {}x{}, texture is {}x{}",
                 self.input_width, self.input_height, input_desc.Width, input_desc.Height

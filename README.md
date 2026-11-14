@@ -15,7 +15,7 @@ Currently Supported:
 - Minimal clip "editor" to edit and export clips:
   - in development :(
 
-The config.toml must be in `config/config.toml` relative to the .exe right now.
+The config.toml file can be specified with `--config path/to/config.toml`, the default is `config/config.toml`.
 
 Example `config.toml`:
 ```toml file="config.toml"
@@ -26,7 +26,7 @@ watch_processes = ["aac", true]
 
 [keybinds]
 save_clip = [
-  ["Alt", "KeyM"]
+  ["Alt", "KeyN"]
 ]
 save_clip_sound_file = "sounds\\BOOM.mp3"
 save_clip_sound_volume = 0.05
@@ -40,8 +40,8 @@ type = "video"
 
 [recorders.frame_config.config]
 fps = 30
-width = 2560
-height = 1440
+width = 1600
+height = 900
 codec = "hevc_amf"
 
 [recorders.frame_config.config.environment]

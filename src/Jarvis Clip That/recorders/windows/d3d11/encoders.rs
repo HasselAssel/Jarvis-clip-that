@@ -1,5 +1,4 @@
-use std::ptr::null_mut;
-
+use std::ffi::c_void;
 use anyhow::{anyhow, bail, Context, Result};
 use ffmpeg_next::{encoder, Frame, Packet};
 use ffmpeg_next::codec::{codec, Parameters};
@@ -176,10 +175,10 @@ fn insert_texture_into_frame(
     av_frame: *mut AVFrame,
     texture: &ID3D11Texture2D,
 ) -> Result<()> {
-    unsafe extern "C" texture_free(opaque: *mut c_void, _data: *mut u8) {
+    unsafe extern "C" fn texture_free(opaque: *mut c_void, _data: *mut u8) {
         // opague is Boxed ID3D11Texture2D
         unsafe {
-            drop(Box::from_raw(opague as *mut ID3D11Texture2D));
+            drop(Box::from_raw(opaque as *mut ID3D11Texture2D));
         }
     }
 
