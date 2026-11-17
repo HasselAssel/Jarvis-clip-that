@@ -107,10 +107,15 @@ impl EncoderWasapi {
 
 impl Encoder for EncoderWasapi {
     type Env<'e> = EnvWasapi;
-    type Input<'i> = WasApiAudioData<'i>;
+    type Input<'i> = Option<WasApiAudioData<'i>>;
     type Output = Vec<Packet>;
 
     fn encode(&mut self, input: Self::Input<'_>, env: &Self::Env<'_>) -> Result<Self::Output> {
+        let input = match input {
+            Some(input) => input,
+            None => return Ok(Vec::new())
+        };
+
         let first_qpc = *self.first_qpc_pos.get_or_insert(input.qpc_pos);
 
         let pts_offset = *self.pts_offset.get_or_insert_with(|| unsafe {

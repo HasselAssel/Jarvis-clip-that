@@ -1,6 +1,7 @@
-use anyhow::{anyhow, Result};
+use anyhow::Result;
 use windows::Win32::Media::Audio::{IAudioCaptureClient, IAudioClient};
 
+use crate::debug;
 use crate::recorders::traits::Source;
 use crate::recorders::windows::wasapi::env::EnvWasapi;
 
@@ -22,7 +23,7 @@ impl SourceWasapi {
 
 impl Source for SourceWasapi {
     type Env<'e> = EnvWasapi;
-    type Output<'o> = WasApiAudioData<'o>;
+    type Output<'o> = Option<WasApiAudioData<'o>>;
     fn next_frame(
         &mut self,
         env: &Self::Env<'_>
@@ -43,7 +44,7 @@ impl Source for SourceWasapi {
         }
 
         if packet_length == 0 {
-            return Err(anyhow!("packet length is 0"));
+            return Ok(None);
         }
 
         let buffer = unsafe {
@@ -53,12 +54,12 @@ impl Source for SourceWasapi {
             )
         };
 
-        Ok(WasApiAudioData {
+        Ok(Some(WasApiAudioData {
             data: buffer,
             qpc_pos,
             packet_length,
             _capture_client: &self.capture_client,
-        })
+        }))
     }
 }
 
@@ -72,6 +73,12 @@ pub struct WasApiAudioData<'a> {
 
 impl<'a> Drop for WasApiAudioData<'a> {
     fn drop(&mut self) {
-        unsafe { self._capture_client.ReleaseBuffer(self.packet_length).unwrap() }
+        let res = unsafe {
+            self._capture_client.ReleaseBuffer(self.packet_length)
+        };
+
+        if let Err(e) = res {
+            debug!(e);
+        }
     }
 }

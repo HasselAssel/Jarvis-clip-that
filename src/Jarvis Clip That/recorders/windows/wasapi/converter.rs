@@ -21,8 +21,8 @@ impl ConverterWasapi {
 
 impl Converter for ConverterWasapi {
     type Env<'e> = EnvWasapi;
-    type Input<'i> = WasApiAudioData<'i>;
-    type Output<'o> = WasApiAudioData<'o>;
+    type Input<'i> = Option<WasApiAudioData<'i>>;
+    type Output<'o> = Option<WasApiAudioData<'o>>;
 
     fn convert<'a>(&'a mut self, input: Self::Input<'a>, _: &Self::Env<'_>) -> Result<Self::Output<'a>> {
         // todo: change frequency if wanted.

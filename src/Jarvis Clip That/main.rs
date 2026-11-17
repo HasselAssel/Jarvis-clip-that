@@ -55,6 +55,8 @@ fn main() {
 
     println!("View your saved clips in \"{}\"", app_config.output_dir);
 
+    println!();
+
     let (cmd_send, cmd_recv) = crossbeam_channel::unbounded();
     let (resp_send, resp_recv) = crossbeam_channel::unbounded();
 

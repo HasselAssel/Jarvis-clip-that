@@ -277,8 +277,12 @@ struct SessionData {
 
 impl Drop for SessionData {
     fn drop(&mut self) {
-        unsafe {
-            let _ = self.control.UnregisterAudioSessionNotification(&self.event);
+        let res = unsafe {
+            self.control.UnregisterAudioSessionNotification(&self.event)
+        };
+
+        if let Err(e) = res {
+            debug!(e);
         }
     }
 }
