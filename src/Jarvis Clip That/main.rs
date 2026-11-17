@@ -120,7 +120,7 @@ fn main() {
     });
 
     #[cfg(target_os = "windows")]
-    if let Some((codec, include_tree)) = app_config.watch_processes {
+    if let Some((codec, include_tree)) = app_config.windows_watch_processes {
         let watcher = WasApiProcessWatcher::new(codec, include_tree, cmd_send).expect("Can't create watcher");
         watcher.start().expect("Watcher Panicked");
     }

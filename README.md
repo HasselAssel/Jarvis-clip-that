@@ -31,17 +31,16 @@ The config.toml file can be specified with `--config path/to/config.toml`, the d
 
 Example `config.toml`:
 ```toml file="config.toml"
-retention_secs = 60
+retention_secs = 67
 output_dir = "C:\\Jarvis-Clips\\clips"
 
-watch_processes = ["aac", true]
+windows_watch_processes = ["aac", true] # codec, windows's include_process_tree boolean
 
 [keybinds]
-save_clip = [
-  ["Alt", "KeyN"]
-]
+save_clip = [["Alt", "KeyN"], ["F8"]]
 save_clip_sound_file = "sounds\\BOOM.mp3"
 save_clip_sound_volume = 0.05
+
 
 
 [[recorders]]

@@ -11,7 +11,7 @@ pub struct AppConfig {
     pub retention_secs: i64,
     pub output_dir: String,
     pub recorders: Vec<Config>,
-    pub watch_processes: Option<(AudioCodec, bool)>,
+    pub windows_watch_processes: Option<(AudioCodec, bool)>,
     pub keybinds: Keybinds,
 }
 
