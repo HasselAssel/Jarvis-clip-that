@@ -6,6 +6,7 @@ use windows::Win32::Graphics::Direct3D11::{D3D11_BIND_RENDER_TARGET, D3D11_TEX2D
 use windows::Win32::Graphics::Dxgi::Common::{DXGI_FORMAT_B8G8R8A8_UNORM, DXGI_FORMAT_NV12, DXGI_RATIONAL, DXGI_SAMPLE_DESC};
 use windows_core::Interface;
 
+use crate::debug;
 use crate::recorders::traits::Converter;
 use crate::recorders::windows::d3d11::env::EnvD3D11;
 use crate::recorders::windows::d3d11::sources::AcquiredFrame;
@@ -192,7 +193,11 @@ impl Converter for BgraToNv12Converter {
 
         let mut tex_nv12 = None;
         unsafe {
-            env.device.CreateTexture2D(&self.nv12_desc, None, Some(&mut tex_nv12))?
+            let res = env.device.CreateTexture2D(&self.nv12_desc, None, Some(&mut tex_nv12));
+            if let Err(e) = res {
+                debug!(e);
+                println!("Device removed reason: {:?}", env.device.GetDeviceRemovedReason());
+            }
         };
         let tex_nv12 = tex_nv12.ok_or_else(|| anyhow!("Can't create Texture"))?;
 

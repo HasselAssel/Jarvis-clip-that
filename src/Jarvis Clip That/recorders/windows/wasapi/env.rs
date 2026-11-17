@@ -43,6 +43,7 @@ use windows::Win32::System::Threading::WaitForSingleObject;
 use windows::Win32::System::Variant::VT_BLOB;
 
 use crate::recorders::traits::Event;
+use crate::recorders::windows::wasapi::sources::SourceWasapi;
 
 pub struct EnvWasapi {
     pub client: IAudioClient,
@@ -99,6 +100,12 @@ impl Event for EnvWasapi {
             let _ = WaitForSingleObject(self.event, INFINITE);
         }
         // TODO: handle return codes!!!
+    }
+}
+
+impl Drop for SourceWasapi {
+    fn drop(&mut self) {
+        todo!("free event_handle")
     }
 }
 

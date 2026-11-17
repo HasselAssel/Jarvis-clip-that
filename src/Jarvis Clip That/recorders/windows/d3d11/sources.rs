@@ -19,7 +19,6 @@ pub struct SourceD3d11 {
 
     output1 : IDXGIOutput1,
 
-    resource: Option<IDXGIResource>,
     frame_info: DXGI_OUTDUPL_FRAME_INFO,
 }
 
@@ -39,14 +38,12 @@ impl SourceD3d11 {
             duplication = output1.DuplicateOutput(&env.device).ok();
         }
 
-        let resource = None;
         let frame_info = DXGI_OUTDUPL_FRAME_INFO::default();
 
         Ok(Self {
             duplication,
             output1,
 
-            resource,
             frame_info,
         })
     }
@@ -71,26 +68,32 @@ impl Source for SourceD3d11 {
         &mut self,
         env: &Self::Env<'_>
     ) -> Result<Self::Output<'_>> {
-        // for some reason the first duplication.AcquireNextFrame call generates no IDXGIResource
+        // for some reason the first duplication.AcquireNextFrame call generates no IDXGIResource, but who cares
 
-        self.resource = None;
+        let mut resource: Option<IDXGIResource> = None;
+
+        if self.duplication.is_none() {
+            self.duplication = Some(unsafe {
+                let res = debug!(self.output1.DuplicateOutput(&env.device));
+                match res {
+                    Ok(duplication) => duplication,
+                    Err(_) => return Ok(None),
+                }
+            });
+        }
 
         let res = unsafe {
-            self.duplication.as_ref().with_context(|| debug!("no duplication"))?.AcquireNextFrame(
+            self.duplication.as_ref().unwrap().AcquireNextFrame(
                 0,
                 &mut self.frame_info,
-                &mut self.resource,
+                &mut resource,
             )
         };
 
         if let Err(err) = res {
             match err.code() {
                 DXGI_ERROR_ACCESS_LOST => {
-                    debug!("new duplication");
-                    self.duplication = None;
-                    self.duplication = Some(unsafe {
-                        self.output1.DuplicateOutput(&env.device)?
-                    });
+                    debug!(self.duplication = None);
                 }
                 DXGI_ERROR_WAIT_TIMEOUT => {}
                 other => {
@@ -101,12 +104,12 @@ impl Source for SourceD3d11 {
         }
 
         let mut acquired_frame = AcquiredFrame {
-            _duplication: self.duplication.as_ref().with_context(|| debug!("no duplication"))?,
+            _duplication: self.duplication.as_ref().unwrap(),
             texture: None,
             frame_info: &self.frame_info
         };
 
-        let dxgi_resource = self.resource.as_ref().with_context(|| "no dxgi_resource!")?;
+        let dxgi_resource = resource.as_ref().with_context(|| "no dxgi_resource!")?;
 
         if self.frame_info.AccumulatedFrames != 0 {
             acquired_frame.texture = Some(dxgi_resource.cast()?);
@@ -131,8 +134,12 @@ impl AcquiredFrame<'_> {
 
 impl Drop for AcquiredFrame<'_> {
     fn drop(&mut self) {
-        let _ = unsafe {
+        let res = unsafe {
             self._duplication.ReleaseFrame()
         };
+
+        if let Err(e) = res {
+            debug!(e);
+        }
     }
 }

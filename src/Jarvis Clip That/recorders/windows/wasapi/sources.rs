@@ -75,9 +75,3 @@ impl<'a> Drop for WasApiAudioData<'a> {
         unsafe { self._capture_client.ReleaseBuffer(self.packet_length).unwrap() }
     }
 }
-
-impl Drop for SourceWasapi {
-    fn drop(&mut self) {
-        todo!("free event_handle")
-    }
-}

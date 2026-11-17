@@ -1,7 +1,7 @@
 use std::thread;
 use std::thread::JoinHandle;
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use crossbeam_channel::{Receiver, Sender};
 use ffmpeg_next::{codec, Packet, Rational};
 
@@ -42,9 +42,9 @@ where
     }
 
     fn next(&mut self) -> Result<<E as Encoder>::Output> {
-        let source_frame = self.source.next_frame(&self.env)?;
-        let converted_frame = self.converter.convert(source_frame, &self.env)?;
-        self.encoder.encode(converted_frame, &self.env)
+        let source_frame = self.source.next_frame(&self.env).context("source.next_frame")?;
+        let converted_frame = self.converter.convert(source_frame, &self.env).context("converter.convert")?;
+        self.encoder.encode(converted_frame, &self.env).context("encoder.encode")
     }
 
     pub fn start(
@@ -69,11 +69,12 @@ where
                         }
                     },
                     Err(e) if e.to_string() == "fatal" => {
+                        debug!(e);
                         return;
-                    }
+                    },
                     Err(err) => {
-                        debug!(err);
-                    }
+                        eprintln!("Unexpected Error: {:#}", err); // unexpected error.
+                    },
                 }
 
                 self.driver.wait(&mut self.env);
