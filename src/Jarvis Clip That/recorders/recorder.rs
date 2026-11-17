@@ -69,11 +69,11 @@ where
                         }
                     },
                     Err(e) if e.to_string() == "fatal" => {
-                        debug!(e);
+                        let _ = debug!(e.context("FATAL"));
                         return;
                     },
                     Err(err) => {
-                        eprintln!("Unexpected Error: {:#}", err); // unexpected error.
+                        eprintln!("Unexpected Error: {:#}", err);
                     },
                 }
 

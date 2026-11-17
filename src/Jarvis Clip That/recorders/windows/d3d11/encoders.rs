@@ -1,4 +1,5 @@
 use std::ffi::c_void;
+
 use anyhow::{anyhow, bail, Context, Result};
 use ffmpeg_next::{encoder, Frame, Packet};
 use ffmpeg_next::codec::{codec, Parameters};
@@ -200,6 +201,8 @@ fn insert_texture_into_frame(
         bail!("can't create buffer");
     }
     unsafe {
+        // (*av_frame).buf[0] has to be NULL or a pointer to an AvBuffer 
+        av_buffer_unref(&mut (*av_frame).buf[0]);
         (*av_frame).data[0] = texture.as_raw() as _;
         (*av_frame).buf[0] = texture_buffer;
     }
